@@ -79,3 +79,10 @@ testpaths = ["tests"]
 markers = [
     "integration: tests that require a live Postgres (skipped when unavailable)",
 ]
+filterwarnings = [
+    # Upstream (not our code): mcp's FastMCP Settings is a pydantic-settings model
+    # whose `lifespan` field has an unresolved forward reference. Benign; emitted
+    # from the pinned mcp SDK (mcp>=1.2,<2). Fires from a bare FastMCP() with none
+    # of our code loaded, so silence it to keep the suite output clean.
+    "ignore:Field 'lifespan' has an incomplete definition",
+]

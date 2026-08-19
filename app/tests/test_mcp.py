@@ -19,12 +19,44 @@ from hivemind_app.mcp_server import _build_mcp
 from hivemind_app.service import MemoryService
 
 
+def _tool_fns(mcp: object) -> dict[str, object]:
+    """Return ``{tool_name: underlying coroutine}`` for a FastMCP instance.
+
+    FastMCP exposes no public API to fetch a tool's underlying callable, so we
+    reach into the version-private ``_tool_manager._tools[...].fn``. mcp is
+    pinned ``>=1.2,<2`` (pyproject) and ``test_private_tool_access_contract``
+    guards this shape, so an incompatible upgrade fails loudly here rather than
+    obscurely across every tool test.
+    """
+    try:
+        registry = mcp._tool_manager._tools  # type: ignore[attr-defined]
+        return {name: tool.fn for name, tool in registry.items()}
+    except AttributeError as exc:  # pragma: no cover - only trips on an mcp upgrade
+        raise AssertionError(
+            "FastMCP private tool-access path changed "
+            "(_tool_manager._tools[name].fn); the pinned mcp SDK likely changed "
+            "shape. Re-check the pin (mcp>=1.2,<2) and update _tool_fns()."
+        ) from exc
+
+
 @pytest.fixture
 def tools(fake_repo, fake_embedder, identity, clock):  # type: ignore[no-untyped-def]
     service = MemoryService(fake_repo, fake_embedder, identity, clock=clock)
-    mcp = _build_mcp(service)
+    return _tool_fns(_build_mcp(service))
+
+
+def test_private_tool_access_contract(fake_repo, fake_embedder, identity) -> None:  # type: ignore[no-untyped-def]
+    """Guard the version-private FastMCP internals the tool tests rely on.
+
+    If a future mcp release renames ``_tool_manager`` / ``_tools`` / ``Tool.fn``,
+    this fails with a clear message instead of the whole module breaking cryptically.
+    """
+    mcp = _build_mcp(MemoryService(fake_repo, fake_embedder, identity))
+    assert hasattr(mcp, "_tool_manager"), "FastMCP no longer exposes _tool_manager"
     registry = mcp._tool_manager._tools
-    return {name: tool.fn for name, tool in registry.items()}
+    assert registry, "no tools registered"
+    sample = next(iter(registry.values()))
+    assert hasattr(sample, "fn") and callable(sample.fn), "Tool.fn is no longer a callable"
 
 
 # ---------------------------------------------------------------------------
