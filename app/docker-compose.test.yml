@@ -1,0 +1,27 @@
+# Ephemeral Postgres + pgvector for local integration tests.
+#
+# Runs on a NON-default host port (5433) to avoid clashing with a real local
+# Postgres. Point the tests at it with:
+#
+#   DATABASE_URL_TEST=postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind_test \
+#       pytest -m integration
+#
+# Bring up:  docker compose -f docker-compose.test.yml up -d
+# Tear down: docker compose -f docker-compose.test.yml down -v
+services:
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: teamtrail
+      POSTGRES_PASSWORD: teamtrail
+      POSTGRES_DB: hivemind_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      # Keep the test database entirely in memory — fast and disposable.
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teamtrail -d hivemind_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

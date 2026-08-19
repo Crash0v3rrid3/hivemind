@@ -1,0 +1,36 @@
+# ── Python (app/) ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.log
+
+# ── Node (cli/) ──
+node_modules/
+cli/dist/
+*.tsbuildinfo
+npm-debug.log*
+.eslintcache
+
+# ── Runtime / secrets (never commit) ──
+rclone.conf
+.hivemind/
+*.ndjson
+
+# ── OS / editors ──
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,31 @@
+# ~/.hivemind.conf — human source of truth for the Hivemind CLI (TOML).
+#
+# The CLI generates the container's env from this file. Resolution order:
+#   built-in defaults < ~/.hivemind.conf < environment overrides
+#
+# Secrets NEVER go in this file. The Google Drive OAuth token lives only in
+# ~/.hivemind/rclone.conf (created by `hivemind setup`).
+
+# Required. Any Google Drive folder URL for the shared `hivemind/` folder.
+# The folder id is extracted from /folders/<id> or ?id=<id>.
+gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz"
+
+# Required. Your handle -> OWNER_HANDLE. Must match ^[a-z0-9][a-z0-9._-]*$
+username = "alice"
+
+# Optional. MCP port on localhost (default 7777, range 1..65535).
+mcp_port = 7777
+
+# Optional. Explicit roster of member handles. Omit to use the admin-managed
+# roster.json in the shared hive folder.
+# roster = ["alice", "bob", "cara"]
+
+# Optional. Host mount path for the FUSE-mounted hive (default "/mnt/hivemind").
+# mount_path = "/mnt/hivemind"
+
+# Optional. Loop intervals in seconds (default 60 each).
+# export_interval_sec = 60
+# import_interval_sec = 60
+
+# Optional. App image tag (default = CLI package version).
+# image_tag = "0.1.0"

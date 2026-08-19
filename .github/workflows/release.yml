@@ -1,0 +1,114 @@
+name: CI & Release
+
+# - Pull requests: run `make check` (unit layer for both packages).
+# - Tag push (v*): publish the CLI to GitHub Packages and build + push the app image to GHCR.
+
+on:
+  pull_request:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # CI — runs on every pull request (and on tags, as a gate before release).
+  # ---------------------------------------------------------------------------
+  check:
+    name: make check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run unit checks for both packages
+        run: make check
+
+  # ---------------------------------------------------------------------------
+  # Publish the CLI (@browserstack/hivemind) to GitHub Packages — tag only.
+  # ---------------------------------------------------------------------------
+  publish-cli:
+    name: Publish CLI to GitHub Packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node for GitHub Packages
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@browserstack"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Build + push the app image to ghcr.io/browserstack/hivemind:<tag> — tag only.
+  # ---------------------------------------------------------------------------
+  publish-image:
+    name: Build & push app image to GHCR
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Derive image tags
+        id: meta
+        run: |
+          RAW="${GITHUB_REF_NAME}"          # e.g. v0.1.0
+          VERSION="${RAW#v}"                 # e.g. 0.1.0
+          echo "raw=${RAW}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/browserstack/hivemind:${{ steps.meta.outputs.raw }}
+            ghcr.io/browserstack/hivemind:${{ steps.meta.outputs.version }}

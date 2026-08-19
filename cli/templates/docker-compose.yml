@@ -1,0 +1,92 @@
+# Hivemind per-node stack.
+#
+# This file is the canonical reference template shipped with @browserstack/hivemind.
+# `hivemind setup` / `hivemind up` regenerate ~/.hivemind/docker-compose.yml from your
+# resolved ~/.hivemind.conf (the app image tag is pinned to the CLI version at that time).
+# All ${...} values are interpolated by Docker Compose from the sibling ~/.hivemind/.env.
+#
+# Three services:
+#   gdrive   — rclone FUSE mount of the shared Google Drive `hivemind/` folder
+#   postgres — Postgres 16 + pgvector, LOCAL named volume (never on the mount)
+#   app      — the MCP server + export/import loops
+services:
+  gdrive:
+    image: rclone/rclone:latest
+    container_name: hivemind-gdrive
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      RCLONE_CONFIG: /config/rclone.conf
+    volumes:
+      - ./rclone.conf:/config/rclone.conf:ro
+      - type: bind
+        source: /mnt/hivemind
+        target: /mnt/hivemind
+        bind:
+          propagation: rshared
+    command:
+      - mount
+      - hivemind:
+      - /mnt/hivemind
+      - --allow-other
+      - --allow-non-empty
+      - --dir-cache-time
+      - 10s
+      - --poll-interval
+      - 10s
+      - --vfs-cache-mode
+      - writes
+      - --umask
+      - "022"
+    healthcheck:
+      test: ["CMD", "test", "-d", "/mnt/hivemind/${OWNER_HANDLE}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: hivemind-postgres
+    environment:
+      POSTGRES_USER: teamtrail
+      POSTGRES_PASSWORD: teamtrail
+      POSTGRES_DB: hivemind
+    volumes:
+      - hivemind-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teamtrail -d hivemind"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  app:
+    image: ghcr.io/browserstack/hivemind:0.1.0
+    container_name: hivemind-app
+    depends_on:
+      gdrive:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    ports:
+      - "${MCP_PORT}:${MCP_PORT}"
+    volumes:
+      - type: bind
+        source: /mnt/hivemind
+        target: /mnt/hivemind
+        bind:
+          propagation: rslave
+    restart: unless-stopped
+
+volumes:
+  hivemind-pgdata:
+    driver: local
