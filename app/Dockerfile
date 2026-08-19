@@ -16,7 +16,12 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY hivemind_app ./hivemind_app
 
-RUN pip install --upgrade pip && pip install .
+# INSTALL_EMBEDDINGS=1 pulls the heavy real embedder (sentence-transformers ->
+# torch) for production. The default (0) builds a small, torch-free image for
+# tests/CI, which run with EMBEDDING_MODEL=fake.
+ARG INSTALL_EMBEDDINGS=0
+RUN pip install --upgrade pip && \
+    if [ "$INSTALL_EMBEDDINGS" = "1" ]; then pip install ".[embeddings]"; else pip install .; fi
 
 # MCP server listens on MCP_PORT (default 7777); the CLI wires env + ports.
 EXPOSE 7777

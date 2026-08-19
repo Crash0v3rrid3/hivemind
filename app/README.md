@@ -54,11 +54,12 @@ pip install -e '.[dev]'
 # Unit layer — no Docker, no Postgres, no model downloads:
 pytest
 
-# Integration layer — needs pgvector Postgres (auto-skips when unavailable):
-docker compose -f docker-compose.test.yml up -d
-DATABASE_URL_TEST='postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind_test' \
+# Integration layer — needs pgvector Postgres (auto-skips when unavailable).
+# The test stack lives at the repo root:
+docker compose -f ../docker-compose.test.yml up -d postgres
+DATABASE_URL_TEST='postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind' \
     pytest -m integration
-docker compose -f docker-compose.test.yml down -v
+docker compose -f ../docker-compose.test.yml down -v
 ```
 
 Lint / type-check:

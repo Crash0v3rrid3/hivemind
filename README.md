@@ -139,10 +139,15 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 pytest -m "not integration"          # unit layer (uses the deterministic FakeEmbedder, no downloads)
 
-# Integration tests against a throwaway pgvector instance:
-docker compose -f docker-compose.test.yml up -d
-DATABASE_URL_TEST=postgresql+asyncpg://teamtrail:teamtrail@localhost:5432/hivemind pytest -m integration
+# Integration tests against a throwaway pgvector instance (test stack, DB only):
+docker compose -f docker-compose.test.yml up -d postgres
+DATABASE_URL_TEST=postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind pytest -m integration
 ```
+
+Two Compose files are maintained: **`docker-compose.test.yml`** (local — pgvector + app, a local
+folder as the hive, fake embeddings, no Google Drive) and **`docker-compose.prod.yml`** (production
+— the Google Drive FUSE mount + pgvector + app). Run the full local stack with
+`docker compose -f docker-compose.test.yml up --build`.
 
 ### Node CLI (`cli/`)
 

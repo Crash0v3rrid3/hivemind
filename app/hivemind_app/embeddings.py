@@ -127,3 +127,22 @@ class FakeEmbedder:
 def zero_vector(dim: int = DEFAULT_EMBEDDING_DIM) -> list[float]:
     """A zero vector of length ``dim`` (used for tombstone embeddings)."""
     return [0.0] * dim
+
+
+# Sentinel model name that selects the deterministic FakeEmbedder (no torch,
+# no downloads). Used by the test docker-compose and local runs.
+FAKE_EMBEDDING_MODEL = "fake"
+
+
+def resolve_embedder(
+    model_name: str,
+    dim: int,
+    embedder: Embedder | None = None,
+) -> Embedder:
+    """Choose an embedder: an explicit instance wins; ``EMBEDDING_MODEL=fake``
+    selects :class:`FakeEmbedder`; otherwise the (lazy) real model."""
+    if embedder is not None:
+        return embedder
+    if model_name == FAKE_EMBEDDING_MODEL:
+        return FakeEmbedder(dim)
+    return SentenceTransformerEmbedder(model_name, dim)

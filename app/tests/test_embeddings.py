@@ -13,10 +13,12 @@ import pytest
 
 from hivemind_app.config import DEFAULT_EMBEDDING_DIM
 from hivemind_app.embeddings import (
+    FAKE_EMBEDDING_MODEL,
     Embedder,
     FakeEmbedder,
     SentenceTransformerEmbedder,
     build_embedding_text,
+    resolve_embedder,
     zero_vector,
 )
 
@@ -127,3 +129,25 @@ def test_sentence_transformer_constructs_without_loading() -> None:
 def test_sentence_transformer_satisfies_protocol() -> None:
     emb = SentenceTransformerEmbedder(dim=384)
     assert isinstance(emb, Embedder)
+
+
+# ---------------------------------------------------------------------------
+# resolve_embedder — selection logic (SPEC §8; enables the test compose).
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_embedder_fake_sentinel_selects_fake() -> None:
+    emb = resolve_embedder(FAKE_EMBEDDING_MODEL, 384)
+    assert isinstance(emb, FakeEmbedder)
+    assert emb.dim == 384
+
+
+def test_resolve_embedder_real_model_is_lazy_not_loaded() -> None:
+    emb = resolve_embedder("BAAI/bge-small-en-v1.5", 384)
+    assert isinstance(emb, SentenceTransformerEmbedder)
+    assert emb._model is None  # constructing must not load torch/download
+
+
+def test_resolve_embedder_explicit_instance_wins() -> None:
+    injected = FakeEmbedder(dim=8)
+    assert resolve_embedder("BAAI/bge-small-en-v1.5", 384, injected) is injected

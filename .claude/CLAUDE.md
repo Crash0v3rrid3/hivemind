@@ -81,7 +81,7 @@ make test        # unit layer both packages (integration tests skip without Post
 
 - Python (`app/`): ruff (E,F,I,UP,B,C4,SIM,RUF; line-length 100), `mypy --strict`, pytest with
   `asyncio_mode=auto` and an `integration` marker. Integration tests skip when `DATABASE_URL_TEST`
-  is unset or Postgres is down; `app/docker-compose.test.yml` spins up pgvector for local runs.
+  is unset or Postgres is down; `docker-compose.test.yml` spins up pgvector for local runs.
 - Node (`cli/`): TypeScript strict, eslint (typescript-eslint), prettier, vitest.
 
 ## Conventions

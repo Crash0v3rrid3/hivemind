@@ -19,12 +19,18 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.30",
     "asyncpg>=0.29",
     "pgvector>=0.3.0",
-    "sentence-transformers>=2.7",
     "pydantic>=2.6",
     "structlog>=24.1",
 ]
 
 [project.optional-dependencies]
+# The real embedder (sentence-transformers -> torch) is heavy and only needed in
+# production. Install with `pip install .[embeddings]`. For tests/CI, omit it and
+# set EMBEDDING_MODEL=fake to use the deterministic FakeEmbedder (no torch, no
+# downloads). Keeping it optional keeps the test image and CI env small.
+embeddings = [
+    "sentence-transformers>=2.7",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

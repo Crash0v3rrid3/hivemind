@@ -29,9 +29,8 @@ hivemind/
       loops.py                 # export loop + import loop (filesystem <-> DB)
       mcp_server.py            # FastMCP tools + FastAPI mount + lifespan (schema init, start loops)
       __main__.py              # entrypoint: python -m hivemind_app
-    pyproject.toml             # deps + ruff + mypy(strict) + pytest config
-    Dockerfile
-    docker-compose.test.yml    # ephemeral Postgres+pgvector for integration tests
+    pyproject.toml             # deps + ruff + mypy(strict) + pytest config; sentence-transformers optional [embeddings]
+    Dockerfile                 # ARG INSTALL_EMBEDDINGS: 0=torch-free (test), 1=real embedder (prod)
     README.md                  # short: how to run/test the app
   cli/                         # Node/TS host CLI, published as @browserstack/hivemind
     src/
@@ -60,6 +59,8 @@ hivemind/
     CLAUDE.md                  # repo guide for Claude working in THIS repo
     agents/                    # helpful subagent definitions (code-reviewer, etc.)
   .github/workflows/release.yml
+  docker-compose.test.yml      # LOCAL test stack: pgvector + app, local hive, fake embeddings (no Drive)
+  docker-compose.prod.yml      # PROD stack: gdrive FUSE mount + pgvector + app (real embedder)
   Makefile                     # fmt / lint / typecheck / test across both packages
   README.md                    # root: what Hivemind is + quickstart
   LICENSE                      # MIT
@@ -359,7 +360,7 @@ tests that need Postgres are marked and SKIP automatically when it is unavailabl
 - `mcp` tools: author always OWNER; author input rejected; filters plumb through.
 - INTEGRATION (marked `integration`, skip if no PG): repository CRUD, HNSW search, schema init.
   Provide a `conftest.py` that skips integration when `DATABASE_URL_TEST` is unset or PG down.
-  `app/docker-compose.test.yml` spins up pgvector for local integration runs.
+  `docker-compose.test.yml` spins up pgvector for local integration runs.
 - Target: cover every pure function and every invariant in §14. Use `FakeEmbedder` everywhere in
   unit tests.
 

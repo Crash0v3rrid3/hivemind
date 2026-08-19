@@ -108,6 +108,8 @@ jobs:
         with:
           context: ./app
           file: ./app/Dockerfile
+          build-args: |
+            INSTALL_EMBEDDINGS=1
           push: true
           tags: |
             ghcr.io/browserstack/hivemind:${{ steps.meta.outputs.raw }}

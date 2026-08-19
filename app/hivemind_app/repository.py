@@ -42,8 +42,14 @@ _HNSW_INDEX_SQL = (
 
 
 async def init_schema(engine: AsyncEngine) -> None:
-    """Create the extension, tables, and HNSW indexes idempotently."""
+    """Create the extension, tables, and HNSW indexes idempotently.
+
+    Safe on a brand-new database: the ``vector`` extension is created before
+    ``create_all`` emits the vector-column DDL, all in one transaction.
+    """
     async with engine.begin() as conn:
+        # CREATE EXTENSION first so the vector type exists before create_all emits
+        # the vector(384) column DDL (same transaction — the type is visible).
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         for stmt in _HNSW_INDEX_SQL:
@@ -86,7 +92,9 @@ def _record_to_values(record: EventRecord) -> dict[str, object]:
         "jira_project": record.jira_project,
         "jira_ticket": record.jira_ticket,
         "tags": list(record.tags),
-        "metadata": dict(record.metadata),
+        # Map to the ORM attribute name (the DB column is "metadata", but the
+        # bare key "metadata" collides with SQLAlchemy's reserved MetaData).
+        "event_metadata": dict(record.metadata),
         "supersedes": record.supersedes,
         "deletes": record.deletes,
         "ts": record.ts,

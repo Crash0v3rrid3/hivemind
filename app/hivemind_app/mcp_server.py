@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from .config import Identity, Settings
 from .db import create_engine, create_sessionmaker
-from .embeddings import Embedder, SentenceTransformerEmbedder
+from .embeddings import Embedder, resolve_embedder
 from .loops import run_export_loop, run_import_loop
 from .repository import Repository, init_schema
 from .schemas import (
@@ -205,11 +205,13 @@ def create_app(
     """Build the FastAPI app hosting the MCP server and background loops.
 
     All dependencies are injectable for testing. When omitted, ``settings`` is
-    read from the environment, ``embedder`` defaults to the (lazy) real model,
-    and ``engine`` is created from ``settings.database_url``.
+    read from the environment, ``engine`` is created from ``settings.database_url``,
+    and ``embedder`` defaults to the (lazy) real model — unless
+    ``EMBEDDING_MODEL=fake``, which selects the deterministic ``FakeEmbedder``
+    (no torch, no downloads) for local testing and CI.
     """
     cfg = settings or Settings.from_env()
-    emb = embedder or SentenceTransformerEmbedder(cfg.embedding_model, cfg.embedding_dim)
+    emb = resolve_embedder(cfg.embedding_model, cfg.embedding_dim, embedder)
     eng = engine or create_engine(cfg.database_url)
     owns_engine = engine is None
     sessionmaker = create_sessionmaker(eng)
