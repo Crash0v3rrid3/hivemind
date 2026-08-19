@@ -163,4 +163,16 @@ describe('runGuard', () => {
     });
     expect(code).toBe(1);
   });
+
+  it('probes the fallback url (e.g. the configured port) when HIVEMIND_MCP_URL is unset', async () => {
+    // Regression: the guard subcommand must honor the conf-derived port, not the
+    // built-in default. An unreachable fallback must yield exit 1.
+    const code = await runGuard({}, UNREACHABLE_URL);
+    expect(code).toBe(1);
+  });
+
+  it('lets HIVEMIND_MCP_URL env win over the provided fallback', async () => {
+    const code = await runGuard({ HIVEMIND_MCP_URL: UNREACHABLE_URL }, 'http://localhost:1/mcp');
+    expect(code).toBe(1);
+  });
 });

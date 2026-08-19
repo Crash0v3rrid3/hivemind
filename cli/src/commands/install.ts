@@ -74,7 +74,11 @@ export function register(program: Command): void {
     .command('guard')
     .description('Probe the Hivemind MCP endpoint; exit non-zero if unreachable')
     .action(async () => {
-      process.exitCode = await runGuard(process.env);
+      // Default the probe URL to the configured mcp_port (matching the installed
+      // guard.sh), falling back to the built-in default when no valid conf exists.
+      const cfg = tryLoadConfig();
+      const fallbackUrl = cfg ? mcpUrlForPort(cfg.mcpPort) : DEFAULT_MCP_URL;
+      process.exitCode = await runGuard(process.env, fallbackUrl);
     });
 
   program

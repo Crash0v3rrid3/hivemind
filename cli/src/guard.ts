@@ -78,9 +78,12 @@ export async function probeMcp(url: string, timeoutMs = 2000): Promise<boolean> 
  * HIVEMIND_GUARD_DISABLE=1. Returns the process exit code (0 = ok/bypassed,
  * 1 = unreachable) and writes the unreachable message to stderr on failure.
  */
-export async function runGuard(env: NodeJS.ProcessEnv = process.env): Promise<number> {
+export async function runGuard(
+  env: NodeJS.ProcessEnv = process.env,
+  fallbackUrl: string = DEFAULT_MCP_URL,
+): Promise<number> {
   if (env.HIVEMIND_GUARD_DISABLE === '1') return 0;
-  const url = resolveGuardUrl(env);
+  const url = resolveGuardUrl(env, fallbackUrl);
   const ok = await probeMcp(url);
   if (ok) return 0;
   process.stderr.write(
