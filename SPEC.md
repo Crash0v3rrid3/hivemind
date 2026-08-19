@@ -5,7 +5,7 @@ over **MCP**. Every developer runs an identical **local** stack (Docker Compose)
 exchanging **immutable NDJSON files** through one shared **Google Drive** folder (`hivemind/`)
 mounted with FUSE. Each node holds the whole team's memory in its own local Postgres.
 
-This document is the single source of truth for the implementation. Build exactly to it.
+This document is the single source of truth for the implementation, kept in sync with the as-built code. The Mermaid diagrams below show the node architecture, the record lifecycle, and the cross-node sync flow.
 
 ---
 
@@ -83,6 +83,23 @@ Per-node Compose services: **gdrive** (FUSE-mounts `hivemind/` with that develop
 credentials), **postgres** (Postgres 16 + pgvector, LOCAL data volume), **app** (MCP server + two
 background loops). Nodes never talk directly; they exchange immutable files via `hivemind/`.
 
+```mermaid
+flowchart LR
+  agent["Claude / MCP client"]
+  subgraph Node["One developer node — Docker Compose"]
+    direction TB
+    app["app: FastMCP server<br/>+ export & import loops"]
+    pg[("postgres + pgvector<br/>local_events · team_events · ingested_files")]
+    mount["hive at /mnt/hivemind<br/>(rclone FUSE **or** Google Drive for Desktop)"]
+    app <--> pg
+    app <--> mount
+  end
+  agent -->|"MCP HTTP :MCP_PORT"| app
+  mount <-->|"sync (owner's Drive credentials)"| drive[("Shared Google Drive<br/>hivemind/&lt;handle&gt;/")]
+  drive <-->|"each peer mounts the same hive"| peers["other nodes<br/>(bob, cara, …)"]
+```
+
+
 ---
 
 ## 3. Trust & identity model
@@ -139,7 +156,7 @@ CREATE TABLE ingested_files (
 
 Implement the schema via SQLAlchemy models + an idempotent init that runs `CREATE EXTENSION IF NOT
 EXISTS vector`, `metadata.create_all`, then `CREATE INDEX IF NOT EXISTS` for the HNSW indexes (raw
-SQL). No Alembic. Register the pgvector type on the async engine `connect` event.
+SQL). No Alembic. Vector columns are bound and parsed by SQLAlchemy's `pgvector.sqlalchemy.Vector` type; the app does **not** register pgvector's asyncpg codec — it double-encodes with the SQLAlchemy type and fails on a fresh database before the extension exists. `init_schema` creates the extension before `create_all` emits the vector-column DDL.
 
 `event_type` values: `update, decision, blocker, dependency, handoff, research, context, note,
 friction, ai_session, tombstone` (tombstone is internal, produced only by delete).
@@ -183,6 +200,17 @@ No row is mutated after insert.
   A record is visible iff its id ∉ hidden_ids and its own event_type != 'tombstone'.
 - History for an id = the chain linked by `supersedes`, ordered by `created_at`.
 
+```mermaid
+flowchart TB
+  A["memory_add → record<br/>supersedes=∅, deletes=∅"] --> V1["visible"]
+  V1 -->|"memory_update (own only)"| U["new record<br/>supersedes = old id"]
+  U --> V2["new record visible<br/>old id ∈ hidden_ids"]
+  V1 -->|"memory_delete (own only)"| T["tombstone record<br/>deletes = target, zero vector"]
+  T --> H["target ∈ hidden_ids<br/>tombstone itself excluded"]
+  V2 -->|"memory_delete"| T
+```
+
+
 ---
 
 ## 7. Export & import loops
@@ -204,6 +232,26 @@ No row is mutated after insert.
 Make the loop bodies callable once (e.g. `export_once()`, `import_once()`) so tests can drive them
 deterministically without the sleep scheduler. Inject the hive filesystem root and the clock.
 
+```mermaid
+sequenceDiagram
+  autonumber
+  participant AA as alice · app
+  participant AH as alice · hive folder
+  participant GD as Google Drive
+  participant BH as bob · hive view
+  participant BA as bob · app
+  AA->>AA: memory_add → insert local_events (author=alice)
+  Note over AA,AH: export loop (≤ EXPORT_INTERVAL_SEC)
+  AA->>AH: write immutable NDJSON (tmp → atomic rename)
+  AH->>GD: sync as alice (write-scoped to alice/)
+  GD->>BH: sync alice/ (read-only to bob)
+  Note over BH,BA: import loop (≤ IMPORT_INTERVAL_SEC)
+  BA->>BH: read new alice/*.ndjson
+  BA->>BA: INSERT team_events, author = folder name (alice)
+  BA->>BA: memory_search → ranks alice's record beside bob's
+```
+
+
 ---
 
 ## 8. Embeddings & search
@@ -213,6 +261,7 @@ deterministically without the sleep scheduler. Inject the hive filesystem root a
 - Define an `Embedder` Protocol with `.dim` and `embed(text) -> list[float]`. Provide
   `SentenceTransformerEmbedder` (lazy-loads the model) and `FakeEmbedder` (deterministic vectors
   from a hash, no downloads) for tests. The real model must NOT load at import time.
+- Backend selection (`resolve_embedder`): `EMBEDDING_MODEL=fake` selects `FakeEmbedder` (torch-free tests/CI); any other value uses `SentenceTransformerEmbedder`. `sentence-transformers` is an optional extra (`pip install .[embeddings]`; Dockerfile `ARG INSTALL_EMBEDDINGS`), so the core/test image needs no torch.
 - Metadata reads (list_recent): UNION both tables, apply filters, drop hidden_ids/tombstones,
   order by ts DESC, limit.
 - Semantic search: embed query; per table `ORDER BY embedding <=> :q LIMIT :pool` with
@@ -239,6 +288,8 @@ All writes are authored as `OWNER_HANDLE` from config — author is NEVER taken 
 Validation: `jira_project` required, uppercase, regex `^[A-Z][A-Z0-9]+$`; `jira_ticket` if present
 matches `^[A-Z][A-Z0-9]+-\d+$`.
 
+The `mcp` SDK is pinned `>=1.2,<2` (the 2.0 release removed `mcp.server.fastmcp`, the FastMCP API this app uses).
+
 ---
 
 ## 10. Configuration
@@ -248,10 +299,12 @@ container's env from it. Resolution: built-in defaults < `~/.hivemind.conf` < en
 
 ```toml
 # ~/.hivemind.conf
-gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCd...Xyz"
 username          = "alice"
+mount_backend     = "rclone"                       # "rclone" (default) or "gdrive_desktop"
+gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCd...Xyz"  # required for rclone
 mcp_port          = 7777
 # optional:
+# gdrive_desktop_path = "/Users/alice/Library/CloudStorage/GoogleDrive-.../My Drive/hivemind"  # required for gdrive_desktop
 # roster              = ["alice","bob","cara"]   # omit -> admin roster.json in the hive
 # mount_path          = "/mnt/hivemind"
 # export_interval_sec = 60
@@ -259,12 +312,15 @@ mcp_port          = 7777
 # image_tag           = "0.1.0"
 ```
 
-Keys: `gdrive_folder_url` (required; extract Drive folder id via regex
-`/folders/([A-Za-z0-9_-]+)` or `[?&]id=([A-Za-z0-9_-]+)`), `username` (required; -> OWNER_HANDLE;
-handle regex `^[a-z0-9][a-z0-9._-]*$`), `mcp_port` (default 7777, 1..65535), `roster` (optional
-string list), `mount_path` (default `/mnt/hivemind`), `export_interval_sec`/`import_interval_sec`
-(default 60), `image_tag` (default = CLI package version). Secrets NEVER go in this file (Drive
-OAuth token lives in `~/.hivemind/rclone.conf`).
+Keys: `username` (required; -> OWNER_HANDLE; handle regex `^[a-z0-9][a-z0-9._-]*$`);
+`mount_backend` (`rclone` default | `gdrive_desktop`); `gdrive_folder_url` (**required for
+`rclone`**, optional for `gdrive_desktop`; Drive folder id extracted via regex
+`/folders/([A-Za-z0-9_-]+)` or `[?&]id=([A-Za-z0-9_-]+)`); `gdrive_desktop_path` (**required for
+`gdrive_desktop`**; absolute host path to the `hivemind/` folder inside the Google Drive for
+Desktop mount); `mcp_port` (default 7777, 1..65535); `roster` (optional string list); `mount_path`
+(rclone FUSE host path, default `/mnt/hivemind`); `export_interval_sec`/`import_interval_sec`
+(default 60); `image_tag` (default = CLI package version). Secrets NEVER go in this file (the rclone
+Drive OAuth token lives in `~/.hivemind/rclone.conf`; the `gdrive_desktop` backend needs no token).
 
 **App env vars** (generated into `~/.hivemind/.env`): `OWNER_HANDLE`, `ROSTER` (comma-separated),
 `HIVEMIND_PATH` (=/mnt/hivemind in-container), `DATABASE_URL`
@@ -276,7 +332,14 @@ OAuth token lives in `~/.hivemind/rclone.conf`).
 
 ## 11. Docker Compose (template shipped by the CLI)
 
-Three services: `gdrive` (rclone FUSE mount; `cap_add: [SYS_ADMIN]`, `devices: [/dev/fuse]`,
+The CLI generates one of two stacks based on `mount_backend`:
+
+- **`rclone`** (default) — three services, described below. Needs a Drive OAuth token.
+- **`gdrive_desktop`** — two services (`postgres` + `app`), NO `gdrive`/rclone container and no
+  token. Google Drive for Desktop syncs the folder locally; the `app` bind-mounts
+  `gdrive_desktop_path` -> `/mnt/hivemind` directly and `depends_on` postgres only.
+
+Three services (rclone backend): `gdrive` (rclone FUSE mount; `cap_add: [SYS_ADMIN]`, `devices: [/dev/fuse]`,
 `security_opt: [apparmor:unconfined]`, bind `/mnt/hivemind` with `propagation: rshared`,
 healthcheck `test -d /mnt/hivemind/${OWNER_HANDLE}`), `postgres` (`pgvector/pgvector:pg16`, LOCAL
 named volume, `pg_isready` healthcheck), `app` (`image: ghcr.io/browserstack/hivemind:<tag>`,
@@ -381,6 +444,7 @@ tests that need Postgres are marked and SKIP automatically when it is unavailabl
 - Python: ruff (format + lint: E,F,I,UP,B,C4,SIM,RUF; line-length 100), mypy strict, pytest with
   `asyncio_mode=auto` and an `integration` marker.
 - Node: TypeScript strict, eslint (typescript-eslint), prettier, vitest with coverage.
+- Compose helpers auto-detect the launcher: the `docker compose` v2 plugin, falling back to the standalone `docker-compose` binary.
 - Root `Makefile` targets: `fmt`, `lint`, `typecheck`, `test`, `check` (all), delegating into both
   packages. `check` must pass on a clean checkout for the unit layer.
 - `.claude/CLAUDE.md`: concise repo guide (architecture, invariants from §14, layout, commands).
