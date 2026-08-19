@@ -202,8 +202,10 @@ describe('resolveConfig', () => {
   it('resolves a minimal conf with defaults applied', () => {
     const cfg = resolveConfig(baseRaw, {}, DEFAULTS);
     expect(cfg).toEqual({
+      mountBackend: 'rclone',
       gdriveFolderUrl: 'https://drive.google.com/drive/folders/CONFID',
       folderId: 'CONFID',
+      gdriveDesktopPath: null,
       ownerHandle: 'confuser',
       mcpPort: 7777,
       roster: [],
@@ -350,6 +352,94 @@ describe('resolveConfig', () => {
     expect(() =>
       resolveConfig(baseRaw, { HIVEMIND_MCP_PORT: '99999' }, DEFAULTS),
     ).toThrow(ConfigError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveConfig — mount backend (rclone vs gdrive_desktop)
+// ---------------------------------------------------------------------------
+describe('resolveConfig — mount backend', () => {
+  const rcloneRaw: RawConf = {
+    gdrive_folder_url: 'https://drive.google.com/drive/folders/CONFID',
+    username: 'confuser',
+  };
+
+  it('defaults to the rclone backend', () => {
+    const cfg = resolveConfig(rcloneRaw, {}, DEFAULTS);
+    expect(cfg.mountBackend).toBe('rclone');
+    expect(cfg.gdriveDesktopPath).toBeNull();
+    expect(cfg.folderId).toBe('CONFID');
+  });
+
+  it('rejects an unknown backend', () => {
+    expect(() =>
+      resolveConfig({ ...rcloneRaw, mount_backend: 'dropbox' }, {}, DEFAULTS),
+    ).toThrow(/invalid mount_backend/);
+  });
+
+  it('rclone backend still requires gdrive_folder_url', () => {
+    expect(() =>
+      resolveConfig({ username: 'alice', mount_backend: 'rclone' }, {}, DEFAULTS),
+    ).toThrow(/gdrive_folder_url is required/);
+  });
+
+  it('gdrive_desktop requires gdrive_desktop_path', () => {
+    expect(() =>
+      resolveConfig({ username: 'alice', mount_backend: 'gdrive_desktop' }, {}, DEFAULTS),
+    ).toThrow(/gdrive_desktop_path is required/);
+  });
+
+  it('gdrive_desktop rejects a non-absolute path', () => {
+    expect(() =>
+      resolveConfig(
+        { username: 'alice', mount_backend: 'gdrive_desktop', gdrive_desktop_path: 'rel/ative' },
+        {},
+        DEFAULTS,
+      ),
+    ).toThrow(/must be an absolute path/);
+  });
+
+  it('gdrive_desktop makes gdrive_folder_url optional (folderId null)', () => {
+    const cfg = resolveConfig(
+      {
+        username: 'alice',
+        mount_backend: 'gdrive_desktop',
+        gdrive_desktop_path: '/Users/alice/My Drive/hivemind',
+      },
+      {},
+      DEFAULTS,
+    );
+    expect(cfg.mountBackend).toBe('gdrive_desktop');
+    expect(cfg.gdriveDesktopPath).toBe('/Users/alice/My Drive/hivemind');
+    expect(cfg.gdriveFolderUrl).toBeNull();
+    expect(cfg.folderId).toBeNull();
+  });
+
+  it('gdrive_desktop still parses a supplied gdrive_folder_url', () => {
+    const cfg = resolveConfig(
+      {
+        username: 'alice',
+        mount_backend: 'gdrive_desktop',
+        gdrive_desktop_path: '/abs/hivemind',
+        gdrive_folder_url: 'https://drive.google.com/drive/folders/OPT123',
+      },
+      {},
+      DEFAULTS,
+    );
+    expect(cfg.folderId).toBe('OPT123');
+  });
+
+  it('resolves backend + desktop path from the environment', () => {
+    const cfg = resolveConfig(
+      { username: 'alice' },
+      {
+        HIVEMIND_MOUNT_BACKEND: 'gdrive_desktop',
+        HIVEMIND_GDRIVE_DESKTOP_PATH: '/env/abs/hivemind',
+      },
+      DEFAULTS,
+    );
+    expect(cfg.mountBackend).toBe('gdrive_desktop');
+    expect(cfg.gdriveDesktopPath).toBe('/env/abs/hivemind');
   });
 });
 

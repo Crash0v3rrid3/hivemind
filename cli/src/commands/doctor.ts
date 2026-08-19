@@ -11,7 +11,13 @@
 import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Command } from 'commander';
-import { cliVersion, ConfigError, loadResolvedConfig, type ResolvedConfig } from '../config.js';
+import {
+  cliVersion,
+  ConfigError,
+  hostHivePath,
+  loadResolvedConfig,
+  type ResolvedConfig,
+} from '../config.js';
 import { runComposeCapture } from '../docker.js';
 import { mcpUrlForPort, probeMcp } from '../guard.js';
 
@@ -30,7 +36,7 @@ function listHiveFolders(mountPath: string): string[] {
 }
 
 function checkMount(cfg: ResolvedConfig): CheckResult {
-  const own = path.join(cfg.mountPath, cfg.ownerHandle);
+  const own = path.join(hostHivePath(cfg), cfg.ownerHandle);
   const ok = existsSync(own) && statSync(own).isDirectory();
   return {
     name: 'mount reachable',
@@ -72,7 +78,7 @@ async function checkMcp(cfg: ResolvedConfig): Promise<CheckResult> {
 }
 
 function checkWriteOwn(cfg: ResolvedConfig): CheckResult {
-  const own = path.join(cfg.mountPath, cfg.ownerHandle);
+  const own = path.join(hostHivePath(cfg), cfg.ownerHandle);
   if (!existsSync(own)) {
     return { name: 'can write own folder', ok: false, critical: true, detail: 'own folder missing' };
   }
@@ -92,7 +98,7 @@ function checkWriteOwn(cfg: ResolvedConfig): CheckResult {
 }
 
 function checkCannotWritePeer(cfg: ResolvedConfig): CheckResult {
-  const folders = listHiveFolders(cfg.mountPath).filter((f) => f !== cfg.ownerHandle);
+  const folders = listHiveFolders(hostHivePath(cfg)).filter((f) => f !== cfg.ownerHandle);
   if (folders.length === 0) {
     return {
       name: 'cannot write peer folder',
@@ -102,7 +108,7 @@ function checkCannotWritePeer(cfg: ResolvedConfig): CheckResult {
     };
   }
   const peer = folders[0]!;
-  const probe = path.join(cfg.mountPath, peer, `.hivemind-doctor-${Date.now()}`);
+  const probe = path.join(hostHivePath(cfg), peer, `.hivemind-doctor-${Date.now()}`);
   try {
     writeFileSync(probe, 'should-fail', 'utf8');
     // If the write succeeded the trust guarantee is broken.
@@ -124,7 +130,7 @@ function checkCannotWritePeer(cfg: ResolvedConfig): CheckResult {
 }
 
 function checkRosterSuperset(cfg: ResolvedConfig): CheckResult {
-  const folders = listHiveFolders(cfg.mountPath);
+  const folders = listHiveFolders(hostHivePath(cfg));
   if (cfg.roster.length === 0) {
     return {
       name: 'roster ⊇ folders',

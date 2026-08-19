@@ -13,6 +13,9 @@ when in doubt, read the spec. Build exactly to it.
 Per-node Compose services:
 
 - **gdrive** — rclone FUSE-mounts `hivemind/` using *this developer's own* Drive credentials.
+  Present only for `mount_backend=rclone`. With `mount_backend=gdrive_desktop` there is NO gdrive
+  service: Google Drive for Desktop syncs the folder and the app bind-mounts `gdrive_desktop_path`
+  directly (no rclone, no OAuth token). Backend logic lives in `config.ts` / `generate.ts`.
 - **postgres** — Postgres 16 + pgvector, on a **LOCAL** named volume (never on the mount).
 - **app** — FastMCP server (streamable HTTP at `MCP_HOST:MCP_PORT/mcp`) plus two background loops:
   - **export loop** — writes this node's un-exported `local_events` to new immutable NDJSON batch

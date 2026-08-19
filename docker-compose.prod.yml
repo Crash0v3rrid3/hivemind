@@ -1,8 +1,16 @@
 # Hivemind — PRODUCTION stack (per developer node).
 #
-# Three services: the Google Drive FUSE mount, Postgres (pgvector), and the app.
-# Each developer runs this with THEIR OWN Drive credentials so Drive enforces
-# per-folder write scoping (authorship = the folder a record sits in).
+# This file is the RCLONE-backend reference: three services — the rclone Google
+# Drive FUSE mount, Postgres (pgvector), and the app. Each developer runs it with
+# THEIR OWN Drive credentials so Drive enforces per-folder write scoping
+# (authorship = the folder a record sits in).
+#
+# MOUNT BACKENDS: `hivemind setup` generates the concrete per-node stack from
+# ~/.hivemind.conf based on `mount_backend`:
+#   - rclone         -> this three-service shape (needs a Drive OAuth token).
+#   - gdrive_desktop -> DROPS the `gdrive` service; Google Drive for Desktop syncs
+#                       the folder and the `app` bind-mounts `gdrive_desktop_path`
+#                       -> /mnt/hivemind directly (no rclone, no OAuth). See cli/generate.ts.
 #
 #   `hivemind setup` generates a concrete, value-baked copy of this stack into
 #   ~/.hivemind/docker-compose.yml (from cli/templates). This root file is the

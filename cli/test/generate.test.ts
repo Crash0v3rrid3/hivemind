@@ -21,8 +21,10 @@ afterEach(() => {
 });
 
 const CFG: ResolvedConfig = {
+  mountBackend: 'rclone',
   gdriveFolderUrl: 'https://drive.google.com/drive/folders/FID123',
   folderId: 'FID123',
+  gdriveDesktopPath: null,
   ownerHandle: 'alice',
   mcpPort: 8123,
   roster: ['alice', 'bob', 'carol'],
@@ -30,6 +32,14 @@ const CFG: ResolvedConfig = {
   exportIntervalSec: 30,
   importIntervalSec: 45,
   imageTag: '2.3.4',
+};
+
+const DESKTOP_CFG: ResolvedConfig = {
+  ...CFG,
+  mountBackend: 'gdrive_desktop',
+  gdriveFolderUrl: null,
+  folderId: null,
+  gdriveDesktopPath: '/Users/alice/My Drive/hivemind',
 };
 
 // ---------------------------------------------------------------------------
@@ -142,6 +152,45 @@ describe('renderDockerCompose', () => {
   it('gates app startup on healthy gdrive + postgres', () => {
     expect(compose).toContain('condition: service_healthy');
   });
+
+  it('quotes the rclone remote in the command (YAML would parse "hivemind:" as a map)', () => {
+    expect(compose).toContain('- "hivemind:"');
+    expect(compose).not.toContain('- hivemind:\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderDockerCompose — gdrive_desktop backend
+// ---------------------------------------------------------------------------
+describe('renderDockerCompose (gdrive_desktop)', () => {
+  const compose = renderDockerCompose(DESKTOP_CFG);
+
+  it('has NO gdrive/rclone service', () => {
+    expect(compose).not.toContain('gdrive:');
+    expect(compose).not.toContain('rclone/rclone');
+    expect(compose).not.toContain('SYS_ADMIN');
+  });
+
+  it('still runs postgres and app', () => {
+    expect(compose).toContain('postgres:');
+    expect(compose).toContain('app:');
+    expect(compose).toContain('image: pgvector/pgvector:pg16');
+  });
+
+  it('bind-mounts the Drive-for-Desktop folder into the container path', () => {
+    expect(compose).toContain(`source: ${DESKTOP_CFG.gdriveDesktopPath}`);
+    expect(compose).toContain(`target: ${CONTAINER_HIVEMIND_PATH}`);
+  });
+
+  it('gates app only on postgres (no gdrive dependency)', () => {
+    expect(compose).toContain('postgres:\n        condition: service_healthy');
+    expect(compose).not.toContain('gdrive:\n        condition: service_healthy');
+  });
+
+  it('pins the app image and publishes the MCP port', () => {
+    expect(compose).toContain(`image: ${APP_IMAGE_REPO}:2.3.4`);
+    expect(compose).toContain('"${MCP_PORT}:${MCP_PORT}"');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -198,5 +247,18 @@ describe('writeGeneratedFiles', () => {
     expect(existsSync(path.join(hmDir, 'rclone.conf'))).toBe(false);
     expect(existsSync(paths.env)).toBe(true);
     expect(existsSync(paths.compose)).toBe(true);
+  });
+
+  it('never writes rclone.conf for the gdrive_desktop backend', () => {
+    const { dir, cleanup } = makeTempDir();
+    cleanups.push(cleanup);
+    const hmDir = path.join(dir, 'hivemind');
+    const restore = withEnv({ HIVEMIND_DIR: hmDir });
+    cleanups.push(restore);
+
+    const paths = writeGeneratedFiles(DESKTOP_CFG);
+    expect(paths.rclone).toBeUndefined();
+    expect(existsSync(path.join(hmDir, 'rclone.conf'))).toBe(false);
+    expect(readFileSync(paths.compose, 'utf8')).not.toContain('gdrive:');
   });
 });

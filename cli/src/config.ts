@@ -26,12 +26,27 @@ export interface RawConf {
   export_interval_sec?: number;
   import_interval_sec?: number;
   image_tag?: string;
+  mount_backend?: string;
+  gdrive_desktop_path?: string;
 }
+
+/** How the hive folder is mounted into the app container. */
+export const MOUNT_BACKENDS = ['rclone', 'gdrive_desktop'] as const;
+export type MountBackend = (typeof MOUNT_BACKENDS)[number];
 
 /** Fully-resolved, validated config used by every command. */
 export interface ResolvedConfig {
-  gdriveFolderUrl: string;
-  folderId: string;
+  /** Which mount backend to generate for: rclone FUSE, or Google Drive for Desktop. */
+  mountBackend: MountBackend;
+  /** Drive folder URL — required for rclone, optional for gdrive_desktop; null when unset. */
+  gdriveFolderUrl: string | null;
+  /** Drive folder id (from the URL) — null when no URL is configured (gdrive_desktop). */
+  folderId: string | null;
+  /**
+   * Absolute host path to the `hivemind/` folder inside the Google Drive for
+   * Desktop mount. Set only when mountBackend === 'gdrive_desktop', else null.
+   */
+  gdriveDesktopPath: string | null;
   /** OWNER_HANDLE — the authoritative author for all local writes. */
   ownerHandle: string;
   mcpPort: number;
@@ -106,6 +121,15 @@ export function extractFolderId(url: string): string {
   );
 }
 
+/** Resolve + validate the mount backend (defaults to 'rclone'). */
+export function resolveMountBackend(value: string | undefined): MountBackend {
+  const v = value ?? 'rclone';
+  if ((MOUNT_BACKENDS as readonly string[]).includes(v)) return v as MountBackend;
+  throw new ConfigError(
+    `invalid mount_backend "${v}" (must be one of ${MOUNT_BACKENDS.join(', ')})`,
+  );
+}
+
 /** Validate a member handle against `^[a-z0-9][a-z0-9._-]*$`. Returns it on success. */
 export function validateHandle(handle: string): string {
   if (typeof handle !== 'string' || !HANDLE_RE.test(handle)) {
@@ -158,12 +182,40 @@ export function resolveConfig(
   env: NodeJS.ProcessEnv = {},
   defaults: ConfigDefaults = defaultConfig(),
 ): ResolvedConfig {
-  // gdrive_folder_url (required)
-  const gdriveFolderUrl = env.HIVEMIND_GDRIVE_FOLDER_URL ?? raw.gdrive_folder_url;
-  if (!gdriveFolderUrl) {
-    throw new ConfigError('gdrive_folder_url is required (set it in ~/.hivemind.conf)');
+  // mount backend (defaults to rclone)
+  const mountBackend = resolveMountBackend(env.HIVEMIND_MOUNT_BACKEND ?? raw.mount_backend);
+
+  // Drive folder URL / id: required for rclone, optional for gdrive_desktop.
+  const gdriveFolderUrl: string | null =
+    env.HIVEMIND_GDRIVE_FOLDER_URL ?? raw.gdrive_folder_url ?? null;
+  let folderId: string | null = null;
+  if (mountBackend === 'rclone') {
+    if (!gdriveFolderUrl) {
+      throw new ConfigError(
+        'gdrive_folder_url is required for mount_backend="rclone" (set it in ~/.hivemind.conf)',
+      );
+    }
+    folderId = extractFolderId(gdriveFolderUrl);
+  } else if (gdriveFolderUrl) {
+    // Optional under gdrive_desktop, but validate it if the user supplied one.
+    folderId = extractFolderId(gdriveFolderUrl);
   }
-  const folderId = extractFolderId(gdriveFolderUrl);
+
+  // gdrive_desktop_path: required (and absolute) for the gdrive_desktop backend.
+  let gdriveDesktopPath: string | null = null;
+  if (mountBackend === 'gdrive_desktop') {
+    const rawDesktop = env.HIVEMIND_GDRIVE_DESKTOP_PATH ?? raw.gdrive_desktop_path;
+    if (!rawDesktop) {
+      throw new ConfigError(
+        'gdrive_desktop_path is required for mount_backend="gdrive_desktop" ' +
+          '(the hivemind/ folder inside your Google Drive for Desktop mount)',
+      );
+    }
+    if (!path.isAbsolute(rawDesktop)) {
+      throw new ConfigError(`gdrive_desktop_path must be an absolute path (got "${rawDesktop}")`);
+    }
+    gdriveDesktopPath = rawDesktop;
+  }
 
   // username -> OWNER_HANDLE (required)
   const rawHandle = env.HIVEMIND_USERNAME ?? raw.username;
@@ -203,8 +255,10 @@ export function resolveConfig(
   const imageTag = env.HIVEMIND_IMAGE_TAG ?? raw.image_tag ?? defaults.imageTag;
 
   return {
+    mountBackend,
     gdriveFolderUrl,
     folderId,
+    gdriveDesktopPath,
     ownerHandle,
     mcpPort,
     roster,
@@ -213,6 +267,17 @@ export function resolveConfig(
     importIntervalSec,
     imageTag,
   };
+}
+
+/**
+ * The host path that actually holds the hive's per-member folders for this
+ * backend: the Google Drive for Desktop folder for `gdrive_desktop`, otherwise
+ * the (FUSE) mount path.
+ */
+export function hostHivePath(cfg: ResolvedConfig): string {
+  return cfg.mountBackend === 'gdrive_desktop' && cfg.gdriveDesktopPath
+    ? cfg.gdriveDesktopPath
+    : cfg.mountPath;
 }
 
 /** Read + parse the conf file, returning an empty conf when it does not exist. */

@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Command } from 'commander';
-import { ConfigError, loadResolvedConfig, type ResolvedConfig } from '../config.js';
+import { ConfigError, hostHivePath, loadResolvedConfig, type ResolvedConfig } from '../config.js';
 import { writeGeneratedFiles } from '../generate.js';
 import { rcloneConfPath } from '../paths.js';
 
@@ -66,16 +66,39 @@ function ensureMountPath(cfg: ResolvedConfig): void {
 }
 
 function verifyAcls(cfg: ResolvedConfig): void {
-  const ownFolder = path.join(cfg.mountPath, cfg.ownerHandle);
+  const ownFolder = path.join(hostHivePath(cfg), cfg.ownerHandle);
   if (existsSync(ownFolder)) {
-    console.log(`Mount is active; own folder present at ${ownFolder}.`);
+    console.log(`Hive is active; own folder present at ${ownFolder}.`);
     console.log('Run `hivemind doctor` for full read/write ACL verification.');
   } else {
     console.log(
-      'Mount not active yet — ACL verification will run once the stack is up ' +
+      'Hive not active yet — ACL verification will run once the stack is up ' +
         '(`hivemind up` then `hivemind doctor`).',
     );
   }
+}
+
+/**
+ * Google Drive for Desktop backend: no rclone/OAuth. Verify the synced hive
+ * folder exists and generate the derived files (no rclone.conf is written).
+ */
+function runSetupGdriveDesktop(cfg: ResolvedConfig): number {
+  const hive = cfg.gdriveDesktopPath as string;
+  console.log(`Google Drive for Desktop hive folder: ${hive}`);
+  if (!existsSync(hive)) {
+    console.warn(
+      `Google Drive for Desktop folder not found at ${hive} — is Drive for Desktop ` +
+        'running and the hivemind/ folder synced? Continuing; the app will pick it up ' +
+        'once it appears.',
+    );
+  }
+  const paths = writeGeneratedFiles(cfg); // rclone.conf skipped automatically
+  console.log(`Wrote ${paths.env}`);
+  console.log(`Wrote ${paths.compose}`);
+  console.log('No rclone.conf needed (gdrive_desktop backend).');
+  verifyAcls(cfg);
+  console.log('\nSetup complete. Start the stack with: hivemind up');
+  return 0;
 }
 
 /** Run the full setup flow. Returns a process exit code (0 = ok). */
@@ -92,8 +115,13 @@ export function runSetup(): number {
   }
 
   console.log(`Owner handle: ${cfg.ownerHandle}`);
-  console.log(`Drive folder id: ${cfg.folderId}`);
+  console.log(`Mount backend: ${cfg.mountBackend}`);
 
+  if (cfg.mountBackend === 'gdrive_desktop') {
+    return runSetupGdriveDesktop(cfg);
+  }
+
+  console.log(`Drive folder id: ${cfg.folderId}`);
   ensureMountPath(cfg);
   const rcloneWritten = configureRclone(cfg);
   const paths = writeGeneratedFiles(cfg, { skipRclone: rcloneWritten });

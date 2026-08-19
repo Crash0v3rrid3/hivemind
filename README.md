@@ -86,14 +86,23 @@ npx -y @browserstack/hivemind doctor
 `~/.hivemind.conf` (TOML) is the only file you edit by hand:
 
 ```toml
-gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCd...Xyz"
 username          = "alice"
+mount_backend     = "rclone"                        # or "gdrive_desktop"
+gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCd...Xyz"
 mcp_port          = 7777
 ```
 
-Everything else — the container `.env`, `rclone.conf`, and `docker-compose.yml` — is generated into
-`~/.hivemind/` from that config. **Secrets never go in `~/.hivemind.conf`**; the Drive OAuth token
-lives in `~/.hivemind/rclone.conf`.
+**Choose a mount backend** for getting the shared Drive folder onto the node:
+
+- `rclone` (default) — mounts Drive via the rclone FUSE container. Needs a Drive OAuth token
+  (created by `setup`, stored in `~/.hivemind/rclone.conf`). Requires `gdrive_folder_url`.
+- `gdrive_desktop` — no rclone, no OAuth `client_id`/`secret`, no token on disk. You run
+  [Google Drive for Desktop](https://support.google.com/a/users/answer/13022292); it syncs the
+  folder locally and Compose bind-mounts it. Set `gdrive_desktop_path` to the `hivemind/` folder
+  inside that mount (e.g. `/Users/alice/Library/CloudStorage/GoogleDrive-alice@corp.com/My Drive/hivemind`).
+
+Everything else — the container `.env`, (for rclone) `rclone.conf`, and `docker-compose.yml` — is
+generated into `~/.hivemind/` from that config. **Secrets never go in `~/.hivemind.conf`.**
 
 Common lifecycle commands:
 

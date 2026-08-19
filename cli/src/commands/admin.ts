@@ -70,6 +70,12 @@ export function register(program: Command): void {
       let folderId: string;
       try {
         const cfg = loadResolvedConfig();
+        if (!cfg.folderId) {
+          throw new ConfigError(
+            'admin provision-user needs the Drive folder id — set gdrive_folder_url in ' +
+              '~/.hivemind.conf (add it even for the gdrive_desktop backend to provision members).',
+          );
+        }
         folderId = cfg.folderId;
         validateHandle(handle);
       } catch (err) {
