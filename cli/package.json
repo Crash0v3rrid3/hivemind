@@ -26,6 +26,7 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "fmt": "prettier --write .",
+    "package": "node scripts/package.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

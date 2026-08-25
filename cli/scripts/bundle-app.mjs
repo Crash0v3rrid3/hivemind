@@ -40,3 +40,11 @@ for (const entry of INCLUDE) {
   });
 }
 console.log(`Bundled app source -> ${dest} (${INCLUDE.join(', ')})`);
+
+// Copy the repo LICENSE into the package so the published tarball carries it
+// (npm auto-includes a top-level LICENSE). Best-effort — skip if absent.
+const licenseSrc = join(repoRoot, 'LICENSE');
+if (existsSync(licenseSrc)) {
+  await cp(licenseSrc, join(cliRoot, 'LICENSE'));
+  console.log(`Bundled LICENSE -> ${join(cliRoot, 'LICENSE')}`);
+}

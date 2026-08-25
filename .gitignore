@@ -21,6 +21,9 @@ node_modules/
 cli/dist/
 # app source bundled into the package at build time (self-sufficient image)
 cli/app/
+# publish artifacts (npm pack tgz + zip) and the bundled LICENSE
+cli/dist-pkg/
+cli/LICENSE
 *.tsbuildinfo
 npm-debug.log*
 .eslintcache
