@@ -37,7 +37,11 @@ app/    Python container app (MCP server + loops).  Owns: models, schemas, seria
 cli/    Node/TS host CLI, published as @browserstack/hivemind. Provisions the node: config,
         rclone mount, generate .env/rclone.conf/docker-compose.yml, wire Claude (CLAUDE.md
         block, MCP entry, guard hook), up/down/status/doctor. Tests in cli/test/.
-.github/ CI (make check on PRs) + release (npm → GitHub Packages, image → GHCR) on tag.
+        SELF-SUFFICIENT: `npm run build` bundles app/ into cli/app (gitignored, shipped via
+        package.json files); setup/up stage it to ~/.hivemind/app and compose builds
+        `hivemind:<version>` LOCALLY — no registry pull. `embeddings` (conf, default true)
+        toggles INSTALL_EMBEDDINGS (torch vs fake). Stack version == package version.
+.github/ CI (make check on PRs) + release (npm → GitHub Packages; GHCR image push is optional) on tag.
 .claude/ This guide + subagents.
 Makefile / README.md / SPEC.md / LICENSE
 ```

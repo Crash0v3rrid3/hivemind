@@ -213,6 +213,7 @@ describe('resolveConfig', () => {
       exportIntervalSec: 60,
       importIntervalSec: 60,
       imageTag: '9.9.9',
+      embeddings: true,
     });
   });
 
@@ -245,6 +246,31 @@ describe('resolveConfig', () => {
     );
     expect(cfg.gdriveFolderUrl).toContain('ENVID');
     expect(cfg.folderId).toBe('ENVID');
+  });
+
+  it('defaults embeddings to true', () => {
+    expect(resolveConfig(baseRaw, {}, DEFAULTS).embeddings).toBe(true);
+  });
+
+  it('lets the conf disable embeddings', () => {
+    expect(resolveConfig({ ...baseRaw, embeddings: false }, {}, DEFAULTS).embeddings).toBe(false);
+  });
+
+  it('lets env override embeddings (precedence over conf)', () => {
+    expect(
+      resolveConfig({ ...baseRaw, embeddings: true }, { HIVEMIND_EMBEDDINGS: 'false' }, DEFAULTS)
+        .embeddings,
+    ).toBe(false);
+    expect(
+      resolveConfig({ ...baseRaw, embeddings: false }, { HIVEMIND_EMBEDDINGS: '1' }, DEFAULTS)
+        .embeddings,
+    ).toBe(true);
+  });
+
+  it('rejects a non-boolean HIVEMIND_EMBEDDINGS', () => {
+    expect(() => resolveConfig(baseRaw, { HIVEMIND_EMBEDDINGS: 'maybe' }, DEFAULTS)).toThrow(
+      ConfigError,
+    );
   });
 
   it('lets env override the username and validates it', () => {

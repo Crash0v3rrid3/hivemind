@@ -309,6 +309,7 @@ mcp_port          = 7777
 # mount_path          = "/mnt/hivemind"
 # export_interval_sec = 60
 # import_interval_sec = 60
+# embeddings          = true   # true = real BAAI embedder (torch); false = torch-free + fake
 # image_tag           = "0.1.0"
 ```
 
@@ -319,7 +320,9 @@ Keys: `username` (required; -> OWNER_HANDLE; handle regex `^[a-z0-9][a-z0-9._-]*
 `gdrive_desktop`**; absolute host path to the `hivemind/` folder inside the Google Drive for
 Desktop mount); `mcp_port` (default 7777, 1..65535); `roster` (optional string list); `mount_path`
 (rclone FUSE host path, default `/mnt/hivemind`); `export_interval_sec`/`import_interval_sec`
-(default 60); `image_tag` (default = CLI package version). Secrets NEVER go in this file (the rclone
+(default 60); `embeddings` (bool, default true; true = build the real torch embedder into the image,
+false = torch-free image + `EMBEDDING_MODEL=fake`; env `HIVEMIND_EMBEDDINGS`); `image_tag` (default =
+CLI package version — the locally-built image tag). Secrets NEVER go in this file (the rclone
 Drive OAuth token lives in `~/.hivemind/rclone.conf`; the `gdrive_desktop` backend needs no token).
 
 **App env vars** (generated into `~/.hivemind/.env`): `OWNER_HANDLE`, `ROSTER` (comma-separated),
@@ -342,9 +345,17 @@ The CLI generates one of two stacks based on `mount_backend`:
 Three services (rclone backend): `gdrive` (rclone FUSE mount; `cap_add: [SYS_ADMIN]`, `devices: [/dev/fuse]`,
 `security_opt: [apparmor:unconfined]`, bind `/mnt/hivemind` with `propagation: rshared`,
 healthcheck `test -d /mnt/hivemind/${OWNER_HANDLE}`), `postgres` (`pgvector/pgvector:pg16`, LOCAL
-named volume, `pg_isready` healthcheck), `app` (`image: ghcr.io/browserstack/hivemind:<tag>`,
+named volume, `pg_isready` healthcheck), `app` (built LOCALLY — see below —
 `depends_on` both healthy, env from `.env`, `ports: ["${MCP_PORT}:${MCP_PORT}"]`, bind the mount
 `rslave`). Postgres data volume is LOCAL — never on the mount.
+
+**The app image is built locally, never pulled (self-sufficient).** The `app` service uses
+`build: { context: ./app, args: { INSTALL_EMBEDDINGS: "0|1" } }` + `image: hivemind:<version>`.
+`setup`/`up` stage the app source (bundled in the CLI package) into `~/.hivemind/app`, so
+`docker compose up` builds `hivemind:<version>` on first run, reuses it afterwards, and rebuilds
+when a package upgrade bumps the version. No registry (GHCR) is required at runtime. The
+`embeddings` config toggle sets `INSTALL_EMBEDDINGS` (1 = real torch embedder, 0 = torch-free
+image + `EMBEDDING_MODEL=fake`).
 
 ---
 
@@ -385,9 +396,17 @@ are unit-testable without touching the real home directory.
 
 CLI published as private `@browserstack/hivemind` on GitHub Packages
 (`publishConfig.registry=https://npm.pkg.github.com`), run via `npx -y @browserstack/hivemind <cmd>`.
-`bin` -> `dist/cli.js` (shebang `#!/usr/bin/env node`). App image on GHCR, pinned to CLI version.
-Durable state in `~/.hivemind/`. GitHub Actions on tag: build+publish npm (NODE_AUTH_TOKEN =
-GITHUB_TOKEN, `permissions: packages: write`) and build+push the app image to GHCR.
+`bin` -> `dist/cli.js` (shebang `#!/usr/bin/env node`). Durable state in `~/.hivemind/`.
+
+**Self-sufficient — the package ships everything to run.** The build bundles the Python app source
+(`app/` → Dockerfile, pyproject, `hivemind_app/**`) into the package (`package.json` `files`
+includes `app/`), and `hivemind up` builds the image locally from it. The **image/stack is coupled
+to the CLI package version**: any stack change ships as a new package version, which changes the
+`hivemind:<version>` tag and triggers a rebuild on upgrade. No registry pull is needed at runtime.
+
+GitHub Actions on tag: build+publish npm (NODE_AUTH_TOKEN = GITHUB_TOKEN,
+`permissions: packages: write`). A GHCR image push remains available as an OPTIONAL convenience but
+is NOT required — `up` builds locally.
 
 ---
 

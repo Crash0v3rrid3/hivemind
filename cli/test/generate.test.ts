@@ -1,15 +1,17 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { readFileSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  APP_IMAGE_REPO,
+  APP_IMAGE_NAME,
   CONTAINER_HIVEMIND_PATH,
   DATABASE_URL,
   EMBEDDING_DIM,
   EMBEDDING_MODEL,
+  FAKE_EMBEDDING_MODEL,
   renderDockerCompose,
   renderEnvFile,
   renderRcloneConf,
+  stageAppSource,
   writeGeneratedFiles,
 } from '../src/generate.js';
 import type { ResolvedConfig } from '../src/config.js';
@@ -32,6 +34,7 @@ const CFG: ResolvedConfig = {
   exportIntervalSec: 30,
   importIntervalSec: 45,
   imageTag: '2.3.4',
+  embeddings: true,
 };
 
 const DESKTOP_CFG: ResolvedConfig = {
@@ -118,8 +121,12 @@ describe('renderRcloneConf', () => {
 describe('renderDockerCompose', () => {
   const compose = renderDockerCompose(CFG);
 
-  it('pins the app image to the resolved tag', () => {
-    expect(compose).toContain(`image: ${APP_IMAGE_REPO}:2.3.4`);
+  it('builds the app image locally and tags it hivemind:<version> (no registry pull)', () => {
+    expect(compose).toContain('build:');
+    expect(compose).toContain('context: ./app');
+    expect(compose).toContain(`image: ${APP_IMAGE_NAME}:2.3.4`);
+    expect(compose).not.toContain('ghcr.io');
+    expect(compose).toContain('INSTALL_EMBEDDINGS: "1"'); // CFG.embeddings === true
   });
 
   it('declares all three services', () => {
@@ -187,9 +194,31 @@ describe('renderDockerCompose (gdrive_desktop)', () => {
     expect(compose).not.toContain('gdrive:\n        condition: service_healthy');
   });
 
-  it('pins the app image and publishes the MCP port', () => {
-    expect(compose).toContain(`image: ${APP_IMAGE_REPO}:2.3.4`);
+  it('builds the app image locally (no registry) and publishes the MCP port', () => {
+    expect(compose).toContain('build:');
+    expect(compose).toContain('context: ./app');
+    expect(compose).toContain(`image: ${APP_IMAGE_NAME}:2.3.4`);
+    expect(compose).not.toContain('ghcr.io');
     expect(compose).toContain('"${MCP_PORT}:${MCP_PORT}"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// embeddings toggle -> INSTALL_EMBEDDINGS build arg + EMBEDDING_MODEL
+// ---------------------------------------------------------------------------
+describe('embeddings toggle', () => {
+  it('embeddings=true bakes the real model (INSTALL_EMBEDDINGS=1, real EMBEDDING_MODEL)', () => {
+    const compose = renderDockerCompose({ ...CFG, embeddings: true });
+    const env = renderEnvFile({ ...CFG, embeddings: true });
+    expect(compose).toContain('INSTALL_EMBEDDINGS: "1"');
+    expect(env).toContain(`EMBEDDING_MODEL=${EMBEDDING_MODEL}`);
+  });
+
+  it('embeddings=false is torch-free (INSTALL_EMBEDDINGS=0, EMBEDDING_MODEL=fake)', () => {
+    const compose = renderDockerCompose({ ...CFG, embeddings: false });
+    const env = renderEnvFile({ ...CFG, embeddings: false });
+    expect(compose).toContain('INSTALL_EMBEDDINGS: "0"');
+    expect(env).toContain(`EMBEDDING_MODEL=${FAKE_EMBEDDING_MODEL}`);
   });
 });
 
@@ -260,5 +289,42 @@ describe('writeGeneratedFiles', () => {
     expect(paths.rclone).toBeUndefined();
     expect(existsSync(path.join(hmDir, 'rclone.conf'))).toBe(false);
     expect(readFileSync(paths.compose, 'utf8')).not.toContain('gdrive:');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stageAppSource — copies the bundled app into ~/.hivemind/app (self-sufficient)
+// ---------------------------------------------------------------------------
+describe('stageAppSource', () => {
+  it('copies the bundled app source into ~/.hivemind/app (clean + recopy)', () => {
+    const { dir, cleanup } = makeTempDir();
+    cleanups.push(cleanup);
+    const hmDir = path.join(dir, 'hivemind');
+    const restore = withEnv({ HIVEMIND_DIR: hmDir });
+    cleanups.push(restore);
+
+    // Fake bundled source.
+    const src = path.join(dir, 'bundle');
+    mkdirSync(path.join(src, 'hivemind_app'), { recursive: true });
+    writeFileSync(path.join(src, 'Dockerfile'), 'FROM python:3.11-slim\n');
+    writeFileSync(path.join(src, 'hivemind_app', '__init__.py'), '');
+
+    // Pre-existing stale content must be removed.
+    mkdirSync(path.join(hmDir, 'app'), { recursive: true });
+    writeFileSync(path.join(hmDir, 'app', 'STALE'), 'old');
+
+    const dest = stageAppSource(src);
+    expect(dest).toBe(path.join(hmDir, 'app'));
+    expect(existsSync(path.join(dest, 'Dockerfile'))).toBe(true);
+    expect(existsSync(path.join(dest, 'hivemind_app', '__init__.py'))).toBe(true);
+    expect(existsSync(path.join(dest, 'STALE'))).toBe(false); // cleaned
+  });
+
+  it('throws a clear error when the bundle is missing (package not built)', () => {
+    const { dir, cleanup } = makeTempDir();
+    cleanups.push(cleanup);
+    const restore = withEnv({ HIVEMIND_DIR: path.join(dir, 'hivemind') });
+    cleanups.push(restore);
+    expect(() => stageAppSource(path.join(dir, 'does-not-exist'))).toThrow(/not found|not built/);
   });
 });

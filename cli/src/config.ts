@@ -28,6 +28,7 @@ export interface RawConf {
   image_tag?: string;
   mount_backend?: string;
   gdrive_desktop_path?: string;
+  embeddings?: boolean;
 }
 
 /** How the hive folder is mounted into the app container. */
@@ -56,6 +57,13 @@ export interface ResolvedConfig {
   exportIntervalSec: number;
   importIntervalSec: number;
   imageTag: string;
+  /**
+   * Whether the app image bakes the real embedder (sentence-transformers/torch).
+   * true (default) -> INSTALL_EMBEDDINGS=1 + the real BAAI model (self-sufficient
+   * semantic search). false -> a torch-free image + EMBEDDING_MODEL=fake, for
+   * lightweight/offline/testing use.
+   */
+  embeddings: boolean;
 }
 
 /** Built-in defaults (lowest precedence). */
@@ -128,6 +136,21 @@ export function resolveMountBackend(value: string | undefined): MountBackend {
   throw new ConfigError(
     `invalid mount_backend "${v}" (must be one of ${MOUNT_BACKENDS.join(', ')})`,
   );
+}
+
+/** Resolve the embeddings toggle (defaults to true). Env value is a string. */
+export function resolveEmbeddings(
+  envVal: string | undefined,
+  rawVal: boolean | undefined,
+): boolean {
+  if (envVal !== undefined) {
+    const v = envVal.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+    if (['0', 'false', 'no', 'off', ''].includes(v)) return false;
+    throw new ConfigError(`invalid HIVEMIND_EMBEDDINGS "${envVal}" (use true or false)`);
+  }
+  if (typeof rawVal === 'boolean') return rawVal;
+  return true; // default: real embedder (self-sufficient)
 }
 
 /** Validate a member handle against `^[a-z0-9][a-z0-9._-]*$`. Returns it on success. */
@@ -254,6 +277,9 @@ export function resolveConfig(
   // image_tag
   const imageTag = env.HIVEMIND_IMAGE_TAG ?? raw.image_tag ?? defaults.imageTag;
 
+  // embeddings toggle (default true)
+  const embeddings = resolveEmbeddings(env.HIVEMIND_EMBEDDINGS, raw.embeddings);
+
   return {
     mountBackend,
     gdriveFolderUrl,
@@ -266,6 +292,7 @@ export function resolveConfig(
     exportIntervalSec,
     importIntervalSec,
     imageTag,
+    embeddings,
   };
 }
 

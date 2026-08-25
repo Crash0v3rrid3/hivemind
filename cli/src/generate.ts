@@ -8,18 +8,29 @@
  * unit-tested without any filesystem access. `writeGeneratedFiles` is the only
  * side-effecting function; it just persists what the pure renderers produce.
  */
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import type { ResolvedConfig } from './config.js';
-import { composePath, envPath, hivemindDir, rcloneConfPath } from './paths.js';
+import {
+  bundledAppDir,
+  composePath,
+  envPath,
+  hivemindAppDir,
+  hivemindDir,
+  rcloneConfPath,
+} from './paths.js';
 
 /** Fixed in-container mount target (host path is configurable; container path is not). */
 export const CONTAINER_HIVEMIND_PATH = '/mnt/hivemind';
 /** Fixed local Postgres DSN (data volume is LOCAL, never on the mount). */
 export const DATABASE_URL =
   'postgresql+asyncpg://teamtrail:teamtrail@postgres:5432/hivemind';
+/** The real (production) embedder, baked into the image when embeddings=true. */
 export const EMBEDDING_MODEL = 'BAAI/bge-small-en-v1.5';
+/** Sentinel selecting the deterministic torch-free FakeEmbedder (embeddings=false). */
+export const FAKE_EMBEDDING_MODEL = 'fake';
 export const EMBEDDING_DIM = 384;
-export const APP_IMAGE_REPO = 'ghcr.io/browserstack/hivemind';
+/** Local image tag; the app is built from bundled source, never pulled from a registry. */
+export const APP_IMAGE_NAME = 'hivemind';
 
 /**
  * Render ~/.hivemind/.env — the container environment (SPEC §10).
@@ -34,7 +45,7 @@ export function renderEnvFile(cfg: ResolvedConfig): string {
     `ROSTER=${cfg.roster.join(',')}`,
     `HIVEMIND_PATH=${CONTAINER_HIVEMIND_PATH}`,
     `DATABASE_URL=${DATABASE_URL}`,
-    `EMBEDDING_MODEL=${EMBEDDING_MODEL}`,
+    `EMBEDDING_MODEL=${cfg.embeddings ? EMBEDDING_MODEL : FAKE_EMBEDDING_MODEL}`,
     `EMBEDDING_DIM=${EMBEDDING_DIM}`,
     `EXPORT_INTERVAL_SEC=${cfg.exportIntervalSec}`,
     `IMPORT_INTERVAL_SEC=${cfg.importIntervalSec}`,
@@ -84,6 +95,22 @@ function postgresServiceBlock(): string {
 }
 
 /**
+ * The app service's image directive: build LOCALLY from the bundled ./app source
+ * (staged into ~/.hivemind/app) and tag it `hivemind:<version>`. `docker compose
+ * up` builds the image on first run (tag absent), reuses it afterwards, and
+ * rebuilds when a package upgrade bumps the tag. Nothing is pulled from a registry.
+ * INSTALL_EMBEDDINGS bakes the real torch embedder only when embeddings=true.
+ */
+function appImageBuild(cfg: ResolvedConfig): string {
+  const install = cfg.embeddings ? '1' : '0';
+  return `    build:
+      context: ./app
+      args:
+        INSTALL_EMBEDDINGS: "${install}"
+    image: ${APP_IMAGE_NAME}:${cfg.imageTag}`;
+}
+
+/**
  * Render ~/.hivemind/docker-compose.yml (SPEC §11). Dispatches on the mount
  * backend: the rclone FUSE stack (three services) or the Google Drive for
  * Desktop stack (two services — the host GDFD folder is bind-mounted directly).
@@ -107,7 +134,7 @@ services:
 ${postgresServiceBlock()}
 
   app:
-    image: ${APP_IMAGE_REPO}:${cfg.imageTag}
+${appImageBuild(cfg)}
     container_name: hivemind-app
     depends_on:
       postgres:
@@ -194,7 +221,7 @@ services:
     restart: unless-stopped
 
   app:
-    image: ${APP_IMAGE_REPO}:${cfg.imageTag}
+${appImageBuild(cfg)}
     container_name: hivemind-app
     depends_on:
       gdrive:
@@ -260,4 +287,29 @@ export function writeGeneratedFiles(cfg: ResolvedConfig, opts: WriteOptions = {}
   }
 
   return result;
+}
+
+/**
+ * Stage the bundled Python app source into ~/.hivemind/app so the generated
+ * compose can build the image locally (`build: context: ./app`). Cleaned and
+ * re-copied every time so a package upgrade refreshes the source. This is what
+ * makes the stack self-sufficient — no image is pulled from a registry.
+ *
+ * `srcDir` defaults to the bundled app in the package; overridable for tests.
+ * Throws if the bundle is missing (i.e. the package was not built).
+ */
+export function stageAppSource(
+  srcDir: string = bundledAppDir(),
+  destDir: string = hivemindAppDir(),
+): string {
+  if (!existsSync(srcDir)) {
+    throw new Error(
+      `Hivemind app source not found at ${srcDir} — the package was not built. ` +
+        'Run `npm run build` in the cli package (or reinstall a published build).',
+    );
+  }
+  rmSync(destDir, { recursive: true, force: true });
+  mkdirSync(hivemindDir(), { recursive: true });
+  cpSync(srcDir, destDir, { recursive: true });
+  return destDir;
 }

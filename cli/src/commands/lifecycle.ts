@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import type { Command } from 'commander';
 import { ConfigError, loadResolvedConfig } from '../config.js';
 import { composeDown, composeLogs, composeStatus, composeUp } from '../docker.js';
-import { writeGeneratedFiles } from '../generate.js';
+import { stageAppSource, writeGeneratedFiles } from '../generate.js';
 import { hivemindConfPath } from '../paths.js';
 
 function requireConfigured(): boolean {
@@ -24,14 +24,17 @@ export function runUp(): number {
   try {
     const cfg = loadResolvedConfig();
     writeGeneratedFiles(cfg, { skipRclone: true });
+    // Stage the bundled app source so compose builds the image locally.
+    stageAppSource();
   } catch (err) {
     if (err instanceof ConfigError) {
       console.error(`config error: ${err.message}`);
       return 1;
     }
-    throw err;
+    console.error((err as Error).message);
+    return 1;
   }
-  console.log('Starting Hivemind stack (first boot ~60-90s while the model loads)...');
+  console.log('Starting Hivemind stack (first run builds the image locally, ~1-3 min)...');
   return composeUp();
 }
 

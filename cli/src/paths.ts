@@ -73,6 +73,23 @@ export function guardScriptPath(): string {
 }
 
 /**
+ * The Python app source BUNDLED inside the published package (`<pkgRoot>/app`).
+ * Created at build time by `scripts/bundle-app.mjs` and shipped via package.json
+ * `files`. This is what makes the package self-sufficient: `hivemind up` builds
+ * the app image locally from here — nothing is pulled from a registry.
+ */
+export function bundledAppDir(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // dist/paths.js -> <pkgRoot>/app ; src/paths.ts (tests/dev) -> cli/app
+  return path.join(here, '..', 'app');
+}
+
+/** Where the app source is staged for the running stack (`~/.hivemind/app`). */
+export function hivemindAppDir(): string {
+  return path.join(hivemindDir(), 'app');
+}
+
+/**
  * Locate the bundled `templates/` directory. When running from the compiled
  * package this sits at dist/templates (copied at build time); in a source
  * checkout it is at the package root. Both are probed.

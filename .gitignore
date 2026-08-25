@@ -19,6 +19,8 @@ htmlcov/
 # ── Node (cli/) ──
 node_modules/
 cli/dist/
+# app source bundled into the package at build time (self-sufficient image)
+cli/app/
 *.tsbuildinfo
 npm-debug.log*
 .eslintcache

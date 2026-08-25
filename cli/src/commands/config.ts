@@ -12,13 +12,16 @@ function printResolved(): void {
   const cfg = loadResolvedConfig();
   const view = {
     ownerHandle: cfg.ownerHandle,
+    mountBackend: cfg.mountBackend,
     gdriveFolderUrl: cfg.gdriveFolderUrl,
     folderId: cfg.folderId,
+    gdriveDesktopPath: cfg.gdriveDesktopPath,
     mcpPort: cfg.mcpPort,
     roster: cfg.roster.length > 0 ? cfg.roster : '(admin roster.json in hive)',
     mountPath: cfg.mountPath,
     exportIntervalSec: cfg.exportIntervalSec,
     importIntervalSec: cfg.importIntervalSec,
+    embeddings: cfg.embeddings,
     imageTag: cfg.imageTag,
   };
   console.log(JSON.stringify(view, null, 2));

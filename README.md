@@ -48,8 +48,9 @@ team's memory in its own local Postgres.
 Two deployables live in this monorepo:
 
 - **`app/`** — the Python container (MCP server + the two background sync loops). Holds the DB
-  models, serialization, append-only repository, search service, and the FastMCP tools. Runs as
-  the `ghcr.io/browserstack/hivemind` image.
+  models, serialization, append-only repository, search service, and the FastMCP tools. Its source
+  is **bundled into the CLI package** and the image is **built locally** by `hivemind up` (tagged
+  `hivemind:<version>`) — nothing is pulled from a registry.
 - **`cli/`** — the Node/TS host CLI, published as `@browserstack/hivemind`. It never contains team
   data; it *provisions the node*: reads `~/.hivemind.conf`, sets up the rclone mount, generates the
   Compose stack and env, wires Claude (CLAUDE.md block, MCP entry, guard hook), and runs
@@ -78,7 +79,8 @@ npx -y @browserstack/hivemind config --edit
 # 3. One-shot: rclone mount + generate the stack, bring it up, verify, and wire Claude
 npx -y @browserstack/hivemind install
 
-# First boot pulls the app image and warms the embedding model (~60–90s).
+# First `up` BUILDS the app image locally from bundled source (no registry). With
+# embeddings=true it installs torch, so the first build is a few minutes; reruns reuse it.
 npx -y @browserstack/hivemind status
 npx -y @browserstack/hivemind doctor
 ```
@@ -193,8 +195,10 @@ hivemind/
 ## Releasing
 
 Pushing a tag (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`, which publishes the CLI to
-GitHub Packages and builds + pushes the app image to `ghcr.io/browserstack/hivemind:<tag>`. Pull
-requests run `make check`. See the workflow for details.
+GitHub Packages. The package is **self-sufficient** — it bundles the app source and `hivemind up`
+builds the image locally — so publishing the app image to GHCR is an **optional** convenience, not
+required at runtime. A stack change ships as a new package version, which rebuilds the local image
+on upgrade. Pull requests run `make check`. See the workflow for details.
 
 ## License
 

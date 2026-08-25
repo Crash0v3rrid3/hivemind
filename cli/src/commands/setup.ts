@@ -11,8 +11,20 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Command } from 'commander';
 import { ConfigError, hostHivePath, loadResolvedConfig, type ResolvedConfig } from '../config.js';
-import { writeGeneratedFiles } from '../generate.js';
+import { stageAppSource, writeGeneratedFiles } from '../generate.js';
 import { rcloneConfPath } from '../paths.js';
+
+/** Stage the bundled app source into ~/.hivemind/app; returns 0 on success. */
+function stageApp(): number {
+  try {
+    const dest = stageAppSource();
+    console.log(`Staged app source -> ${dest} (the stack builds its image locally)`);
+    return 0;
+  } catch (err) {
+    console.error((err as Error).message);
+    return 1;
+  }
+}
 
 function rcloneAvailable(): boolean {
   const res = spawnSync('rclone', ['version'], { stdio: 'ignore' });
@@ -96,6 +108,8 @@ function runSetupGdriveDesktop(cfg: ResolvedConfig): number {
   console.log(`Wrote ${paths.env}`);
   console.log(`Wrote ${paths.compose}`);
   console.log('No rclone.conf needed (gdrive_desktop backend).');
+  const staged = stageApp();
+  if (staged !== 0) return staged;
   verifyAcls(cfg);
   console.log('\nSetup complete. Start the stack with: hivemind up');
   return 0;
@@ -131,6 +145,8 @@ export function runSetup(): number {
   if (paths.rclone) console.log(`Wrote ${paths.rclone}`);
   else console.log(`rclone remote configured at ${rcloneConfPath()}`);
 
+  const staged = stageApp();
+  if (staged !== 0) return staged;
   verifyAcls(cfg);
   console.log('\nSetup complete. Start the stack with: hivemind up');
   return 0;

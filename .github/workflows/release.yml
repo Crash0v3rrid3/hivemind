@@ -72,7 +72,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
-  # Build + push the app image to ghcr.io/browserstack/hivemind:<tag> — tag only.
+  # OPTIONAL: build + push the app image to ghcr.io/browserstack/hivemind:<tag>.
+  # NOT required at runtime — the CLI package is self-sufficient: `hivemind up`
+  # builds the app image LOCALLY from bundled source. This job is only a
+  # convenience (e.g. shared CI caches); nothing in the user flow pulls from GHCR.
   # ---------------------------------------------------------------------------
   publish-image:
     name: Build & push app image to GHCR

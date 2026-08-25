@@ -9,7 +9,8 @@
   },
   "files": [
     "dist/",
-    "templates/"
+    "templates/",
+    "app/"
   ],
   "engines": {
     "node": ">=18"
@@ -18,7 +19,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-templates.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/copy-templates.mjs && node scripts/bundle-app.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
