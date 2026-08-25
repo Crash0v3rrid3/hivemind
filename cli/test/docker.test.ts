@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { _resetComposeCmd, composeBaseArgs, resolveComposeCmd } from '../src/docker.js';
+import {
+  _resetComposeCmd,
+  composeBaseArgs,
+  dockerPullArgs,
+  POSTGRES_IMAGE,
+  resolveComposeCmd,
+} from '../src/docker.js';
 
 const origEnv = { ...process.env };
 
@@ -18,6 +24,17 @@ describe('composeBaseArgs', () => {
     expect(args).toContain('--env-file');
     // The launcher/sub-command is resolved separately, never baked in here.
     expect(args).not.toContain('compose');
+  });
+});
+
+describe('dockerPullArgs', () => {
+  it('pre-pulls the pgvector postgres image by default', () => {
+    expect(POSTGRES_IMAGE).toBe('pgvector/pgvector:pg16');
+    expect(dockerPullArgs()).toEqual(['pull', 'pgvector/pgvector:pg16']);
+  });
+
+  it('pulls an explicitly given image', () => {
+    expect(dockerPullArgs('postgres:16')).toEqual(['pull', 'postgres:16']);
   });
 });
 

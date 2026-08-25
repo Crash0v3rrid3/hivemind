@@ -6,7 +6,7 @@
  * Works with either the Docker Compose v2 plugin (`docker compose`) or the
  * standalone `docker-compose` binary, preferring the plugin and falling back.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { composePath, envPath, hivemindDir } from './paths.js';
 
@@ -44,6 +44,35 @@ export function _resetComposeCmd(): void {
   _resolved = undefined;
 }
 
+let _buildkitOk: boolean | undefined;
+
+/**
+ * Whether the `docker buildx` component is available. When it is NOT, BuildKit
+ * builds fail with "BuildKit is enabled but buildx is missing", so compose
+ * builds must fall back to the legacy builder. Cached after the first probe.
+ */
+function buildkitAvailable(): boolean {
+  if (_buildkitOk === undefined) {
+    const r = spawnSync('docker', ['buildx', 'version'], { stdio: 'ignore' });
+    _buildkitOk = !r.error && r.status === 0;
+  }
+  return _buildkitOk;
+}
+
+/** Reset the cached buildx probe (tests only). */
+export function _resetBuildkit(): void {
+  _buildkitOk = undefined;
+}
+
+/**
+ * Environment for compose invocations. When buildx is unavailable we force the
+ * legacy builder (DOCKER_BUILDKIT=0) so `up`'s local image build doesn't fail;
+ * the app Dockerfile builds cleanly on either builder.
+ */
+function composeEnv(): NodeJS.ProcessEnv {
+  return buildkitAvailable() ? process.env : { ...process.env, DOCKER_BUILDKIT: '0' };
+}
+
 /** The project/env args shared by every Compose invocation (file + env file). PURE. */
 export function composeBaseArgs(): string[] {
   return ['-f', composePath(), '--env-file', envPath()];
@@ -74,6 +103,7 @@ export function runCompose(args: string[]): number {
   const result = spawnSync(compose.cmd, [...compose.pre, ...composeBaseArgs(), ...args], {
     stdio: 'inherit',
     cwd: hivemindDir(),
+    env: composeEnv(),
   });
   if (result.error) {
     const err = result.error as NodeJS.ErrnoException;
@@ -96,11 +126,43 @@ export function runComposeCapture(args: string[]): { code: number; stdout: strin
   const result = spawnSync(compose.cmd, [...compose.pre, ...composeBaseArgs(), ...args], {
     encoding: 'utf8',
     cwd: hivemindDir(),
+    env: composeEnv(),
   });
   if (result.error) {
     return { code: 127, stdout: '', stderr: (result.error as Error).message };
   }
   return { code: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+/**
+ * The postgres image the stack runs on. Kept here so the pre-pull below and any
+ * test can reference the exact tag without parsing the generated compose file. PURE.
+ */
+export const POSTGRES_IMAGE = 'pgvector/pgvector:pg16';
+
+/** Args for a best-effort `docker pull <image>` (defaults to the postgres image). PURE. */
+export function dockerPullArgs(image: string = POSTGRES_IMAGE): string[] {
+  return ['pull', image];
+}
+
+/**
+ * Best-effort, non-blocking pre-pull of the postgres image so it downloads
+ * CONCURRENTLY with the (usually slower) local app-image build instead of being
+ * serialized after it. Fully non-fatal: a missing `docker` binary, an offline
+ * host, or any pull failure is ignored, and this never blocks `up` — the child is
+ * detached and unref'd, and `compose up` will pull postgres itself if this hasn't
+ * finished. Returns true if a pull child was spawned.
+ */
+export function prePullPostgres(): boolean {
+  try {
+    const child = spawn('docker', dockerPullArgs(), { stdio: 'ignore', detached: true });
+    // Swallow spawn errors (e.g. ENOENT when docker is absent) so nothing surfaces.
+    child.on('error', () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** `<compose> up -d` (detached). */

@@ -97,6 +97,7 @@ export function register(program: Command): void {
         process.exitCode = upCode;
         return;
       }
+      console.log('First `up` compiled the app image locally (one-time); later runs reuse the cache.');
       const doctorCode = await runDoctor();
       if (doctorCode !== 0) {
         console.warn(

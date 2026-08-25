@@ -24,12 +24,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The real embedder (sentence-transformers -> torch) is heavy and only needed in
+# The real embedder (fastembed -> onnxruntime, torch-free) is only needed in
 # production. Install with `pip install .[embeddings]`. For tests/CI, omit it and
-# set EMBEDDING_MODEL=fake to use the deterministic FakeEmbedder (no torch, no
+# set EMBEDDING_MODEL=fake to use the deterministic FakeEmbedder (no fastembed, no
 # downloads). Keeping it optional keeps the test image and CI env small.
 embeddings = [
-    "sentence-transformers>=2.7",
+    "fastembed>=0.3",
 ]
 dev = [
     "pytest>=8.0",
@@ -67,7 +67,8 @@ plugins = []
 
 [[tool.mypy.overrides]]
 module = [
-    "sentence_transformers.*",
+    "fastembed.*",
+    "onnxruntime.*",
     "pgvector.*",
     "mcp.*",
 ]

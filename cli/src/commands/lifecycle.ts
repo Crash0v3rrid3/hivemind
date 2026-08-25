@@ -6,7 +6,7 @@
 import { existsSync } from 'node:fs';
 import type { Command } from 'commander';
 import { ConfigError, loadResolvedConfig } from '../config.js';
-import { composeDown, composeLogs, composeStatus, composeUp } from '../docker.js';
+import { composeDown, composeLogs, composeStatus, composeUp, prePullPostgres } from '../docker.js';
 import { stageAppSource, writeGeneratedFiles } from '../generate.js';
 import { hivemindConfPath } from '../paths.js';
 
@@ -34,7 +34,10 @@ export function runUp(): number {
     console.error((err as Error).message);
     return 1;
   }
-  console.log('Starting Hivemind stack (first run builds the image locally, ~1-3 min)...');
+  console.log('Starting Hivemind stack (first run builds the image locally, ~1 min)...');
+  // Pull postgres in the background so it downloads concurrently with the app
+  // build rather than being serialized after it (best-effort; never blocks).
+  prePullPostgres();
   return composeUp();
 }
 

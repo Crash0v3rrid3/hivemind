@@ -22,15 +22,15 @@ hivemind/
       db.py                    # async engine/sessionmaker, pgvector type registration, Base
       models.py                # SQLAlchemy 2.0 mapped Event (local_events, team_events, ingested_files)
       schemas.py               # Pydantic v2 request/response models (NO identity fields)
-      embeddings.py            # Embedder protocol + real (sentence-transformers) + FakeEmbedder
+      embeddings.py            # Embedder protocol + real (fastembed / onnxruntime, no torch) + FakeEmbedder
       serialization.py         # NDJSON (de)serialize, atomic write, tolerant parse, folder->author
       repository.py            # async CRUD over Postgres (append-only), hidden-id computation
       service.py               # MemoryService: add/update/delete/get/list/search/history + daily_summary
       loops.py                 # export loop + import loop (filesystem <-> DB)
       mcp_server.py            # FastMCP tools + FastAPI mount + lifespan (schema init, start loops)
       __main__.py              # entrypoint: python -m hivemind_app
-    pyproject.toml             # deps + ruff + mypy(strict) + pytest config; sentence-transformers optional [embeddings]
-    Dockerfile                 # ARG INSTALL_EMBEDDINGS: 0=torch-free (test), 1=real embedder (prod)
+    pyproject.toml             # deps + ruff + mypy(strict) + pytest config; fastembed optional [embeddings] (onnxruntime, no torch)
+    Dockerfile                 # ARG INSTALL_EMBEDDINGS: 0=fake embedder (test), 1=real fastembed/onnx (prod)
     README.md                  # short: how to run/test the app
   cli/                         # Node/TS host CLI, published as @browserstack/hivemind
     src/
@@ -258,10 +258,11 @@ sequenceDiagram
 
 - Model `BAAI/bge-small-en-v1.5`, 384-dim, L2-normalized, cosine (`<=>`). Local, no API/key.
 - Embedded text = `title + "\n\n" + body`. Computed at write time; carried in files.
-- Define an `Embedder` Protocol with `.dim` and `embed(text) -> list[float]`. Provide
-  `SentenceTransformerEmbedder` (lazy-loads the model) and `FakeEmbedder` (deterministic vectors
-  from a hash, no downloads) for tests. The real model must NOT load at import time.
-- Backend selection (`resolve_embedder`): `EMBEDDING_MODEL=fake` selects `FakeEmbedder` (torch-free tests/CI); any other value uses `SentenceTransformerEmbedder`. `sentence-transformers` is an optional extra (`pip install .[embeddings]`; Dockerfile `ARG INSTALL_EMBEDDINGS`), so the core/test image needs no torch.
+- Define an `Embedder` Protocol with `.dim` and `embed(text) -> list[float]`. Provide the real
+  embedder backed by **fastembed** (onnxruntime, no torch) that lazy-loads the ONNX model, and
+  `FakeEmbedder` (deterministic vectors from a hash, no downloads) for tests. The real model must
+  NOT load at import time.
+- Backend selection (`resolve_embedder`): `EMBEDDING_MODEL=fake` selects `FakeEmbedder` (dependency-free tests/CI); any other value uses the fastembed embedder. `fastembed`/`onnxruntime` are an optional extra (`pip install .[embeddings]`; Dockerfile `ARG INSTALL_EMBEDDINGS`), so the core/test image needs neither. With `INSTALL_EMBEDDINGS=1` the small ONNX model is baked into the image at build time, so the first query is instant and needs no network; because there is no torch, the image is much smaller (~300-400 MB vs ~2 GB) and builds in ~1 min.
 - Metadata reads (list_recent): UNION both tables, apply filters, drop hidden_ids/tombstones,
   order by ts DESC, limit.
 - Semantic search: embed query; per table `ORDER BY embedding <=> :q LIMIT :pool` with
@@ -309,7 +310,7 @@ mcp_port          = 7777
 # mount_path          = "/mnt/hivemind"
 # export_interval_sec = 60
 # import_interval_sec = 60
-# embeddings          = true   # true = real BAAI embedder (torch); false = torch-free + fake
+# embeddings          = true   # true = real BAAI embedder (fastembed/onnx); false = fake (instant)
 # image_tag           = "0.1.0"
 ```
 
@@ -320,8 +321,9 @@ Keys: `username` (required; -> OWNER_HANDLE; handle regex `^[a-z0-9][a-z0-9._-]*
 `gdrive_desktop`**; absolute host path to the `hivemind/` folder inside the Google Drive for
 Desktop mount); `mcp_port` (default 7777, 1..65535); `roster` (optional string list); `mount_path`
 (rclone FUSE host path, default `/mnt/hivemind`); `export_interval_sec`/`import_interval_sec`
-(default 60); `embeddings` (bool, default true; true = build the real torch embedder into the image,
-false = torch-free image + `EMBEDDING_MODEL=fake`; env `HIVEMIND_EMBEDDINGS`); `image_tag` (default =
+(default 60); `embeddings` (bool, default true; true = bake the real fastembed/onnx embedder plus its
+ONNX model into the image, false = a lean fake-embedder image + `EMBEDDING_MODEL=fake`; env
+`HIVEMIND_EMBEDDINGS`); `image_tag` (default =
 CLI package version — the locally-built image tag). Secrets NEVER go in this file (the rclone
 Drive OAuth token lives in `~/.hivemind/rclone.conf`; the `gdrive_desktop` backend needs no token).
 
@@ -354,8 +356,9 @@ named volume, `pg_isready` healthcheck), `app` (built LOCALLY — see below —
 `setup`/`up` stage the app source (bundled in the CLI package) into `~/.hivemind/app`, so
 `docker compose up` builds `hivemind:<version>` on first run, reuses it afterwards, and rebuilds
 when a package upgrade bumps the version. No registry (GHCR) is required at runtime. The
-`embeddings` config toggle sets `INSTALL_EMBEDDINGS` (1 = real torch embedder, 0 = torch-free
-image + `EMBEDDING_MODEL=fake`).
+`embeddings` config toggle sets `INSTALL_EMBEDDINGS` (1 = real fastembed/onnxruntime embedder with
+the ONNX model baked in — no torch, so the image is small and builds in ~1 min; 0 = lean
+fake-embedder image + `EMBEDDING_MODEL=fake`).
 
 ---
 
@@ -397,6 +400,8 @@ are unit-testable without touching the real home directory.
 CLI published as private `@browserstack/hivemind` on GitHub Packages
 (`publishConfig.registry=https://npm.pkg.github.com`), run via `npx -y @browserstack/hivemind <cmd>`.
 `bin` -> `dist/cli.js` (shebang `#!/usr/bin/env node`). Durable state in `~/.hivemind/`.
+Tip: `npm i -g @browserstack/hivemind` installs the `hivemind` binary once and lets you call
+`hivemind <cmd>` directly, avoiding npx re-resolving the package on every invocation.
 
 **Self-sufficient — the package ships everything to run.** The build bundles the Python app source
 (`app/` → Dockerfile, pyproject, `hivemind_app/**`) into the package (`package.json` `files`

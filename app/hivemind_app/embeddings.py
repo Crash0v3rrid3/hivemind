@@ -2,13 +2,16 @@
 
 Defines the :class:`Embedder` protocol plus two implementations:
 
-* :class:`SentenceTransformerEmbedder` — wraps ``BAAI/bge-small-en-v1.5``; the
-  heavy model is **lazy-loaded** on first use so importing this module (or the
-  whole package) never triggers a model download.
+* :class:`FastEmbedEmbedder` — wraps ``BAAI/bge-small-en-v1.5`` via
+  ``fastembed`` (ONNX Runtime, **no torch**); the model is **lazy-loaded** on
+  first use so importing this module (or the whole package) never triggers a
+  model download or pulls in ``fastembed`` / ``onnxruntime``.
 * :class:`FakeEmbedder` — deterministic, hash-derived vectors with no network
   or disk access, used throughout the unit tests.
 
-Both produce L2-normalized ``list[float]`` of the configured dimension.
+Both produce L2-normalized ``list[float]`` of the configured dimension. The
+FastEmbed output is normalized explicitly here (we do not assume the backend
+normalizes) so the cosine invariant holds regardless of model behavior.
 """
 
 from __future__ import annotations
@@ -47,11 +50,13 @@ class Embedder(Protocol):
         ...
 
 
-class SentenceTransformerEmbedder:
-    """Real embedder backed by sentence-transformers.
+class FastEmbedEmbedder:
+    """Real embedder backed by ``fastembed`` (ONNX Runtime, torch-free).
 
     The model is loaded lazily on the first call to :meth:`embed` (or
-    :meth:`load`), never at import time.
+    :meth:`load`), never at import time. ``fastembed`` is imported inside those
+    methods so importing this module never pulls in ``fastembed`` /
+    ``onnxruntime`` or downloads weights.
     """
 
     def __init__(
@@ -71,23 +76,24 @@ class SentenceTransformerEmbedder:
         """Load the underlying model if not already loaded."""
         if self._model is None:
             # Imported here (not at module top) so importing this module never
-            # pulls in torch / sentence-transformers or downloads weights.
-            from sentence_transformers import SentenceTransformer
+            # pulls in fastembed / onnxruntime or downloads weights.
+            from fastembed import TextEmbedding
 
-            self._model = SentenceTransformer(self._model_name)
+            self._model = TextEmbedding(model_name=self._model_name)
 
     def embed(self, text: str) -> list[float]:
         self.load()
         assert self._model is not None  # for type-checkers
-        vec = self._model.encode(  # type: ignore[attr-defined]
-            text,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-        )
-        result = [float(x) for x in vec.tolist()]
+        # fastembed's embed() returns a generator of numpy arrays, one per input.
+        vectors = list(self._model.embed([text]))  # type: ignore[attr-defined]
+        if not vectors:
+            raise ValueError("fastembed returned no embedding for the input text")
+        result = [float(x) for x in vectors[0].tolist()]
         if len(result) != self._dim:
             raise ValueError(f"model produced dim {len(result)}, expected {self._dim}")
-        return result
+        # Normalize explicitly — do not assume fastembed normalizes — so the
+        # cosine invariant holds.
+        return _l2_normalize(result)
 
 
 class FakeEmbedder:
@@ -129,7 +135,7 @@ def zero_vector(dim: int = DEFAULT_EMBEDDING_DIM) -> list[float]:
     return [0.0] * dim
 
 
-# Sentinel model name that selects the deterministic FakeEmbedder (no torch,
+# Sentinel model name that selects the deterministic FakeEmbedder (no fastembed,
 # no downloads). Used by the test docker-compose and local runs.
 FAKE_EMBEDDING_MODEL = "fake"
 
@@ -145,4 +151,4 @@ def resolve_embedder(
         return embedder
     if model_name == FAKE_EMBEDDING_MODEL:
         return FakeEmbedder(dim)
-    return SentenceTransformerEmbedder(model_name, dim)
+    return FastEmbedEmbedder(model_name, dim)

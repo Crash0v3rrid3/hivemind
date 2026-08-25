@@ -22,7 +22,10 @@ team's memory in its own local Postgres.
   read-only for everyone else, and each node's mount authenticates as its own developer — so Drive
   itself rejects forged cross-author writes.
 - **Local semantic search.** Embeddings (`BAAI/bge-small-en-v1.5`, 384-dim) are computed at write
-  time with a local model — no API, no key — and carried in the files so importers never re-embed.
+  time with a local **fastembed/onnxruntime** model (no torch, no API, no key) and carried in the
+  files so importers never re-embed. The default `embeddings=true` bakes the small ONNX model into
+  the image at build; set `embeddings=false` for an instant, model-free fake-embedder image for
+  quick trials.
 
 ## Architecture
 
@@ -64,7 +67,8 @@ The full data model, file format, loop semantics, MCP tool surface, and invarian
 ## Quickstart (via `npx`)
 
 The CLI is published privately to GitHub Packages, so configure npm for the `@browserstack` scope
-once, then drive everything through `npx`.
+once, then drive everything through `npx`. (Or run `npm i -g @browserstack/hivemind` once and call
+`hivemind <cmd>` directly — this avoids npx re-resolving the package on every call.)
 
 ```sh
 # 1. Point the @browserstack scope at GitHub Packages and authenticate (needs a GitHub token
@@ -79,8 +83,8 @@ npx -y @browserstack/hivemind config --edit
 # 3. One-shot: rclone mount + generate the stack, bring it up, verify, and wire Claude
 npx -y @browserstack/hivemind install
 
-# First `up` BUILDS the app image locally from bundled source (no registry). With
-# embeddings=true it installs torch, so the first build is a few minutes; reruns reuse it.
+# First `up` BUILDS the app image locally from bundled source (no registry). The real embedder is
+# fastembed/onnxruntime (no torch), so the image is small and the first build is ~1 min; reruns reuse it.
 npx -y @browserstack/hivemind status
 npx -y @browserstack/hivemind doctor
 ```
@@ -141,7 +145,7 @@ are marked `integration` and skip automatically when it is unavailable.
 
 ### Python app (`app/`)
 
-- Python, SQLAlchemy 2.0 (async), Pydantic v2, FastMCP + FastAPI, pgvector, sentence-transformers.
+- Python, SQLAlchemy 2.0 (async), Pydantic v2, FastMCP + FastAPI, pgvector, fastembed (onnxruntime, no torch).
 - Tooling: `ruff` (format + lint), `mypy --strict`, `pytest` (`asyncio_mode=auto`, `integration` marker).
 
 ```sh

@@ -1,12 +1,15 @@
 """Tests for the embedder protocol, FakeEmbedder, and helpers (SPEC §8, §14).
 
-The real SentenceTransformerEmbedder is verified only for its lazy-loading
-contract (no model download at import/construction time) so the unit layer never
-touches the network.
+The real FastEmbedEmbedder is verified only for its lazy-loading contract (no
+``fastembed`` import and no model download at import/construction time) so the
+unit layer never touches the network and stays green with neither torch nor
+fastembed installed. A test that actually runs fastembed skips when it is not
+installed.
 """
 
 from __future__ import annotations
 
+import builtins
 import math
 
 import pytest
@@ -16,7 +19,7 @@ from hivemind_app.embeddings import (
     FAKE_EMBEDDING_MODEL,
     Embedder,
     FakeEmbedder,
-    SentenceTransformerEmbedder,
+    FastEmbedEmbedder,
     build_embedding_text,
     resolve_embedder,
     zero_vector,
@@ -115,20 +118,52 @@ def test_zero_vector_custom_dim() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SentenceTransformerEmbedder — lazy loading contract only.
+# FastEmbedEmbedder — lazy loading contract only (no fastembed required).
 # ---------------------------------------------------------------------------
 
 
-def test_sentence_transformer_constructs_without_loading() -> None:
-    # Constructing must NOT import torch / sentence-transformers or download.
-    emb = SentenceTransformerEmbedder("BAAI/bge-small-en-v1.5", dim=384)
+def test_fastembed_constructs_without_loading() -> None:
+    # Constructing must NOT import fastembed / onnxruntime or download.
+    emb = FastEmbedEmbedder("BAAI/bge-small-en-v1.5", dim=384)
     assert emb.dim == 384
     assert emb._model is None  # not yet loaded
 
 
-def test_sentence_transformer_satisfies_protocol() -> None:
-    emb = SentenceTransformerEmbedder(dim=384)
+def test_fastembed_satisfies_protocol() -> None:
+    emb = FastEmbedEmbedder(dim=384)
     assert isinstance(emb, Embedder)
+
+
+def test_fastembed_construction_does_not_import_fastembed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Constructing the real embedder (directly or via resolve_embedder) must not
+    # import fastembed. Poison the import so any attempt raises loudly. This
+    # holds even in the unit env where fastembed is not installed.
+    real_import = builtins.__import__
+
+    def _guarded_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "fastembed" or name.startswith("fastembed."):
+            raise AssertionError("fastembed must not be imported at construction time")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _guarded_import)
+
+    emb = FastEmbedEmbedder("BAAI/bge-small-en-v1.5", dim=384)
+    assert emb._model is None
+    resolved = resolve_embedder("BAAI/bge-small-en-v1.5", 384)
+    assert isinstance(resolved, FastEmbedEmbedder)
+    assert resolved._model is None
+
+
+def test_fastembed_embed_runs_when_installed() -> None:
+    # Only runs when fastembed is actually installed; skipped otherwise so the
+    # unit layer stays green with neither torch nor fastembed present.
+    pytest.importorskip("fastembed")
+    emb = FastEmbedEmbedder("BAAI/bge-small-en-v1.5", dim=384)
+    vec = emb.embed("hello world")
+    assert len(vec) == 384
+    assert _l2(vec) == pytest.approx(1.0, abs=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +179,8 @@ def test_resolve_embedder_fake_sentinel_selects_fake() -> None:
 
 def test_resolve_embedder_real_model_is_lazy_not_loaded() -> None:
     emb = resolve_embedder("BAAI/bge-small-en-v1.5", 384)
-    assert isinstance(emb, SentenceTransformerEmbedder)
-    assert emb._model is None  # constructing must not load torch/download
+    assert isinstance(emb, FastEmbedEmbedder)
+    assert emb._model is None  # constructing must not load fastembed/download
 
 
 def test_resolve_embedder_explicit_instance_wins() -> None:

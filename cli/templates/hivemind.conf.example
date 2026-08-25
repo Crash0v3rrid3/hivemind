@@ -57,10 +57,11 @@ mcp_port = 7777
 
 # Semantic-search embeddings (default true). The app image is built LOCALLY from
 # source bundled in this package — never pulled from a registry.
-#   true  -> bakes the real embedder (BAAI/bge-small-en-v1.5 via torch); the first
-#            `hivemind up` build is larger/slower but gives real semantic search.
-#   false -> a lightweight, torch-free image using a deterministic fake embedder
-#            (EMBEDDING_MODEL=fake) — good for offline/testing/quick trials.
+#   true  -> bakes the real embedder (BAAI/bge-small-en-v1.5 via fastembed/onnx,
+#            no torch) plus its small ONNX model into the image; the first
+#            `hivemind up` build is ~1 min and the first query is instant.
+#   false -> a lean, model-free image using a deterministic fake embedder
+#            (EMBEDDING_MODEL=fake) — instant, good for offline/testing/quick trials.
 # embeddings = true
 
 # App image tag (default = CLI package version). A stack change ships as a new
