@@ -170,9 +170,11 @@ export function composeUp(): number {
   return runCompose(['up', '-d']);
 }
 
-/** `<compose> down`. */
-export function composeDown(): number {
-  return runCompose(['down']);
+/** `<compose> down` (add `-v` to also drop the local Postgres volume). */
+export function composeDown(opts: { volumes?: boolean } = {}): number {
+  const args = ['down'];
+  if (opts.volumes) args.push('-v');
+  return runCompose(args);
 }
 
 /** `<compose> ps` (status table). */

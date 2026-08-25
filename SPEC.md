@@ -376,6 +376,12 @@ MCP reachable + can-write-own / cannot-write-peer + roster ⊇ folders + image t
 `admin provision-user <handle> <email>` (Drive API: create folder + share), `install` (one-shot:
 setup -> up -> doctor -> the three install-*).
 
+Inverses: `uninstall-usage-instructions`, `uninstall-mcp-server`, `uninstall-enforcement`
+(pure, idempotent removals that preserve siblings/other hooks + delete `guard.sh`), and
+`uninstall` (one-shot: `down` + the three above; `--purge` also drops the Postgres volume,
+`~/.hivemind`, and the local `hivemind:<version>` image). Uninstall NEVER touches the shared
+Drive folder — that is the team's memory, not local node state.
+
 The **guard hook must never call npx** — install a self-contained `~/.hivemind/guard.sh`:
 ```sh
 #!/bin/sh

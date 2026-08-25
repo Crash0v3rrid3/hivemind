@@ -7,6 +7,9 @@ import {
   installMcpServer,
   installUsageInstructions,
   mergeUserPromptSubmitHook,
+  removeClaudeMdBlock,
+  removeMcpServer,
+  removeUserPromptSubmitHook,
   upsertClaudeMdBlock,
   upsertMcpServer,
 } from '../src/claude.js';
@@ -346,5 +349,82 @@ describe('installEnforcementHook (file wrapper)', () => {
     expect(parsed.model).toBe('opus');
     expect(parsed.hooks.PostToolUse[0].hooks[0].command).toBe('p.sh');
     expect(parsed.hooks.UserPromptSubmit[0].hooks[0].command).toBe(GUARD_CMD);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inverses (uninstall)
+// ---------------------------------------------------------------------------
+describe('removeClaudeMdBlock', () => {
+  it('round-trips: upsert then remove restores the original content', () => {
+    const original = '# My notes\n\nsome content here\n';
+    const removed = removeClaudeMdBlock(upsertClaudeMdBlock(original));
+    expect(removed).toBe(original);
+    expect(removed).not.toContain(USAGE_BLOCK_BEGIN);
+  });
+  it('reduces a block-only document to empty', () => {
+    expect(removeClaudeMdBlock(upsertClaudeMdBlock(''))).toBe('');
+  });
+  it('is a no-op when the block is absent', () => {
+    const doc = '# unrelated\n\nnothing to remove\n';
+    expect(removeClaudeMdBlock(doc)).toBe(doc);
+  });
+});
+
+describe('removeMcpServer', () => {
+  it('removes only the named server, preserving siblings and other keys', () => {
+    const root = {
+      numFoo: 1,
+      mcpServers: { hivemind: { type: 'http', url: 'x' }, other: { type: 'http', url: 'y' } },
+    };
+    const out = removeMcpServer(root, 'hivemind');
+    expect(out.mcpServers).toEqual({ other: { type: 'http', url: 'y' } });
+    expect(out.numFoo).toBe(1);
+  });
+  it('drops the mcpServers key when it becomes empty', () => {
+    const out = removeMcpServer({ mcpServers: { hivemind: { type: 'http', url: 'x' } } }, 'hivemind');
+    expect('mcpServers' in out).toBe(false);
+  });
+  it('is a no-op when absent and does not mutate input', () => {
+    const root = { mcpServers: { other: {} } };
+    const out = removeMcpServer(root, 'hivemind');
+    expect(out).toEqual(root);
+    expect(out).not.toBe(root);
+  });
+});
+
+describe('removeUserPromptSubmitHook', () => {
+  const CMD = '/home/u/.hivemind/guard.sh';
+  it('round-trips: merge then remove restores the original settings', () => {
+    const base = { model: 'opus' };
+    expect(removeUserPromptSubmitHook(mergeUserPromptSubmitHook(base, CMD), CMD)).toEqual(base);
+  });
+  it('preserves other events and other UserPromptSubmit hooks', () => {
+    const settings = {
+      hooks: {
+        PostToolUse: [{ hooks: [{ type: 'command', command: 'p.sh' }] }],
+        UserPromptSubmit: [
+          {
+            hooks: [
+              { type: 'command', command: CMD },
+              { type: 'command', command: 'keep.sh' },
+            ],
+          },
+        ],
+      },
+    };
+    const out = removeUserPromptSubmitHook(settings, CMD);
+    const hooks = out.hooks as {
+      PostToolUse: { hooks: { command: string }[] }[];
+      UserPromptSubmit: { hooks: { command: string }[] }[];
+    };
+    expect(hooks.PostToolUse[0].hooks[0].command).toBe('p.sh');
+    expect(hooks.UserPromptSubmit[0].hooks.map((h) => h.command)).toEqual(['keep.sh']);
+  });
+  it('is a no-op when the command is absent', () => {
+    const settings = {
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'other.sh' }] }] },
+    };
+    expect(removeUserPromptSubmitHook(settings, CMD)).toEqual(settings);
   });
 });

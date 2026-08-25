@@ -125,6 +125,62 @@ export function mergeUserPromptSubmitHook(
 }
 
 // ---------------------------------------------------------------------------
+// Inverses (uninstall) — pure, idempotent: a no-op when the block/entry/hook is
+// already absent, and every surrounding piece is preserved.
+// ---------------------------------------------------------------------------
+
+/** Remove the managed Hivemind block from a CLAUDE.md document. Unchanged if absent. PURE. */
+export function removeClaudeMdBlock(existing: string): string {
+  const begin = existing.indexOf(USAGE_BLOCK_BEGIN);
+  const end = existing.indexOf(USAGE_BLOCK_END);
+  if (begin === -1 || end === -1 || end < begin) return existing;
+  const before = existing.slice(0, begin);
+  const after = existing.slice(end + USAGE_BLOCK_END.length);
+  const joined = before.replace(/\s+$/, '') + after.replace(/^\s+/, '');
+  const trimmed = joined.replace(/\s+$/, '');
+  return trimmed === '' ? '' : trimmed + '\n';
+}
+
+/** Remove one MCP server entry, preserving siblings and other keys. Unchanged if absent. PURE. */
+export function removeMcpServer(
+  root: Record<string, unknown>,
+  name: string,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...root };
+  const servers = { ...asRecord(next.mcpServers) };
+  if (!(name in servers)) return next;
+  delete servers[name];
+  if (Object.keys(servers).length === 0) delete next.mcpServers;
+  else next.mcpServers = servers;
+  return next;
+}
+
+/**
+ * Remove a UserPromptSubmit command hook, dropping any group left empty and
+ * preserving all other events/hooks. Unchanged if the command is absent. PURE.
+ */
+export function removeUserPromptSubmitHook(
+  settings: Record<string, unknown>,
+  command: string,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...settings };
+  const hooks = { ...asRecord(next.hooks) };
+  if (!Array.isArray(hooks.UserPromptSubmit)) return next;
+  const groups = (hooks.UserPromptSubmit as HookGroup[])
+    .map((g) =>
+      Array.isArray(g.hooks)
+        ? { ...g, hooks: g.hooks.filter((h) => !(h && h.command === command)) }
+        : g,
+    )
+    .filter((g) => !(Array.isArray(g.hooks) && g.hooks.length === 0));
+  if (groups.length === 0) delete hooks.UserPromptSubmit;
+  else hooks.UserPromptSubmit = groups;
+  if (Object.keys(hooks).length === 0) delete next.hooks;
+  else next.hooks = hooks;
+  return next;
+}
+
+// ---------------------------------------------------------------------------
 // File I/O wrappers (thin; delegate all logic to the pure editors above)
 // ---------------------------------------------------------------------------
 
@@ -168,5 +224,30 @@ export function installEnforcementHook(command: string): string {
   const settings = readJsonFile(p);
   const updated = mergeUserPromptSubmitHook(settings, command);
   writeJsonFile(p, updated);
+  return p;
+}
+
+/** Remove the Hivemind block from ~/.claude/CLAUDE.md (no-op if the file/block is absent). */
+export function uninstallUsageInstructions(): string {
+  const p = claudeMdPath();
+  if (!existsSync(p)) return p;
+  const updated = removeClaudeMdBlock(readTextFile(p));
+  writeFileSync(p, updated, 'utf8');
+  return p;
+}
+
+/** Remove the Hivemind MCP server from ~/.claude.json (no-op if absent). */
+export function uninstallMcpServer(): string {
+  const p = claudeJsonPath();
+  if (!existsSync(p)) return p;
+  writeJsonFile(p, removeMcpServer(readJsonFile(p), 'hivemind'));
+  return p;
+}
+
+/** Remove the guard hook (matching `command`) from ~/.claude/settings.json (no-op if absent). */
+export function uninstallEnforcementHook(command: string): string {
+  const p = claudeSettingsPath();
+  if (!existsSync(p)) return p;
+  writeJsonFile(p, removeUserPromptSubmitHook(readJsonFile(p), command));
   return p;
 }

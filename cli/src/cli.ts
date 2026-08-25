@@ -13,6 +13,7 @@ import { register as registerSetup } from './commands/setup.js';
 import { register as registerLifecycle } from './commands/lifecycle.js';
 import { register as registerDoctor } from './commands/doctor.js';
 import { register as registerInstall } from './commands/install.js';
+import { register as registerUninstall } from './commands/uninstall.js';
 import { register as registerAdmin } from './commands/admin.js';
 
 function buildProgram(): Command {
@@ -28,6 +29,7 @@ function buildProgram(): Command {
   registerLifecycle(program);
   registerDoctor(program);
   registerInstall(program);
+  registerUninstall(program);
   registerAdmin(program);
 
   program.showHelpAfterError();

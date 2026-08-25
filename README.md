@@ -116,6 +116,7 @@ Common lifecycle commands:
 |---|---|
 | `npx -y @browserstack/hivemind up` | Regenerate derived files from conf, then start the stack |
 | `npx -y @browserstack/hivemind down` | Stop the stack |
+| `npx -y @browserstack/hivemind uninstall` | Inverse of `install`: stop + unwire Claude (`--purge` also removes local data; never touches the Drive folder) |
 | `npx -y @browserstack/hivemind status` / `logs` | Inspect the running stack |
 | `npx -y @browserstack/hivemind doctor` | Check mount / DB / MCP reachability, ACLs, roster, image tag |
 | `npx -y @browserstack/hivemind admin provision-user <handle> <email>` | Create + share a member's Drive folder |
