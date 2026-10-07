@@ -25,8 +25,10 @@ export function register(program: Command): void {
         writeFileSync(
           dest,
           [
-            'gdrive_folder_url = "https://drive.google.com/drive/folders/REPLACE_ME"',
             'username = "your-handle"',
+            'deploy_backend = "nix"',
+            'mount_backend = "gdrive_desktop"',
+            'gdrive_desktop_path = "/REPLACE/ME/My Drive/hivemind"',
             'mcp_port = 7777',
             '',
           ].join('\n'),
@@ -34,7 +36,7 @@ export function register(program: Command): void {
         );
       }
       console.log(`Wrote ${dest}`);
-      console.log('Edit it (gdrive_folder_url, username), then run: hivemind setup');
+      console.log('Edit it (username, gdrive_desktop_path), then run: hivemind setup');
       // Surface the current contents so the user knows what to edit.
       console.log('\n--- current contents ---');
       console.log(readFileSync(dest, 'utf8').trimEnd());

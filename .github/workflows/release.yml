@@ -1,6 +1,6 @@
 name: CI & Release
 
-# - Pull requests: run `make check` (unit layer for both packages).
+# - Pull requests: run `make check` (unit layer) + a macOS Nix flake build.
 # - Tag push (v*): publish the CLI to GitHub Packages and build + push the app image to GHCR.
 
 on:
@@ -35,6 +35,27 @@ jobs:
 
       - name: Run unit checks for both packages
         run: make check
+
+  # ---------------------------------------------------------------------------
+  # Nix flake build (macOS) — validates the default `deploy_backend=nix` runtime
+  # surface: the app package + the process-compose `up` lifecycle app build.
+  # ---------------------------------------------------------------------------
+  nix-build:
+    name: Nix flake build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix (flakes enabled)
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the app flake (fake package + up lifecycle)
+        run: |
+          nix build ./app#app-fake -L
+          nix build ./app#up -L
 
   # ---------------------------------------------------------------------------
   # Publish the CLI (@browserstack/hivemind) to GitHub Packages — tag only.

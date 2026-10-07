@@ -29,11 +29,16 @@ export interface RawConf {
   mount_backend?: string;
   gdrive_desktop_path?: string;
   embeddings?: boolean;
+  deploy_backend?: string;
 }
 
 /** How the hive folder is mounted into the app container. */
 export const MOUNT_BACKENDS = ['rclone', 'gdrive_desktop'] as const;
 export type MountBackend = (typeof MOUNT_BACKENDS)[number];
+
+/** Which runtime operates the stack: nix (process-compose, no Docker) or docker. */
+export const DEPLOY_BACKENDS = ['nix', 'docker'] as const;
+export type DeployBackend = (typeof DEPLOY_BACKENDS)[number];
 
 /** Fully-resolved, validated config used by every command. */
 export interface ResolvedConfig {
@@ -64,6 +69,12 @@ export interface ResolvedConfig {
    * lightweight/offline/testing use.
    */
   embeddings: boolean;
+  /**
+   * Runtime backend: 'nix' (default; process-compose, no Docker) or 'docker'. When
+   * 'nix' is selected but the nix binary is unavailable, commands fall back to docker
+   * at runtime (resolved by effectiveBackend in nix.ts, not here).
+   */
+  deployBackend: DeployBackend;
 }
 
 /** Built-in defaults (lowest precedence). */
@@ -135,6 +146,15 @@ export function resolveMountBackend(value: string | undefined): MountBackend {
   if ((MOUNT_BACKENDS as readonly string[]).includes(v)) return v as MountBackend;
   throw new ConfigError(
     `invalid mount_backend "${v}" (must be one of ${MOUNT_BACKENDS.join(', ')})`,
+  );
+}
+
+/** Resolve + validate the deploy backend (defaults to 'nix'). */
+export function resolveDeployBackend(value: string | undefined): DeployBackend {
+  const v = value ?? 'nix';
+  if ((DEPLOY_BACKENDS as readonly string[]).includes(v)) return v as DeployBackend;
+  throw new ConfigError(
+    `invalid deploy_backend "${v}" (must be one of ${DEPLOY_BACKENDS.join(', ')})`,
   );
 }
 
@@ -280,6 +300,9 @@ export function resolveConfig(
   // embeddings toggle (default true)
   const embeddings = resolveEmbeddings(env.HIVEMIND_EMBEDDINGS, raw.embeddings);
 
+  // deploy backend (default nix; runtime falls back to docker when nix is absent)
+  const deployBackend = resolveDeployBackend(env.HIVEMIND_DEPLOY_BACKEND ?? raw.deploy_backend);
+
   return {
     mountBackend,
     gdriveFolderUrl,
@@ -293,6 +316,7 @@ export function resolveConfig(
     importIntervalSec,
     imageTag,
     embeddings,
+    deployBackend,
   };
 }
 

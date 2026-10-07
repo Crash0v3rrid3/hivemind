@@ -91,7 +91,7 @@ export function register(program: Command): void {
         process.exitCode = setupCode;
         return;
       }
-      const upCode = runUp();
+      const upCode = await runUp();
       if (upCode !== 0) {
         console.error('install: `up` failed, aborting.');
         process.exitCode = upCode;

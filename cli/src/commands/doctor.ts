@@ -19,6 +19,8 @@ import {
   type ResolvedConfig,
 } from '../config.js';
 import { runComposeCapture } from '../docker.js';
+import { effectiveBackend, NIX_PG_PORT, tcpOpen } from '../nix.js';
+import { hivemindAppDir } from '../paths.js';
 import { mcpUrlForPort, probeMcp } from '../guard.js';
 
 interface CheckResult {
@@ -63,6 +65,29 @@ function checkDb(): CheckResult {
     ok,
     critical: true,
     detail: ok ? 'pg_isready ok' : `pg_isready failed (${res.stderr.trim() || res.stdout.trim()})`,
+  };
+}
+
+async function checkDbNix(): Promise<CheckResult> {
+  const ok = await tcpOpen('127.0.0.1', NIX_PG_PORT);
+  return {
+    name: 'postgres reachable',
+    ok,
+    critical: true,
+    detail: ok
+      ? `listening on 127.0.0.1:${NIX_PG_PORT}`
+      : `no listener on 127.0.0.1:${NIX_PG_PORT}`,
+  };
+}
+
+function checkNixStaged(): CheckResult {
+  const flake = path.join(hivemindAppDir(), 'flake.nix');
+  const ok = existsSync(flake);
+  return {
+    name: 'app flake staged',
+    ok,
+    critical: true,
+    detail: ok ? `present at ${flake}` : `missing ${flake} — run \`hivemind setup\``,
   };
 }
 
@@ -176,14 +201,25 @@ export async function runDoctor(): Promise<number> {
     throw err;
   }
 
+  const { backend, note } = effectiveBackend(cfg);
+  if (note) console.warn(note);
+  console.log(`Deploy backend: ${backend}`);
+
   const results: CheckResult[] = [];
   results.push(checkMount(cfg));
-  results.push(checkDb());
+  if (backend === 'nix') {
+    results.push(checkNixStaged());
+    results.push(await checkDbNix());
+  } else {
+    results.push(checkDb());
+  }
   results.push(await checkMcp(cfg));
   results.push(checkWriteOwn(cfg));
   results.push(checkCannotWritePeer(cfg));
   results.push(checkRosterSuperset(cfg));
-  results.push(checkImageTag(cfg));
+  if (backend === 'docker') {
+    results.push(checkImageTag(cfg));
+  }
 
   let failedCritical = false;
   for (const r of results) {

@@ -1,6 +1,6 @@
 # ~/.hivemind.conf — human source of truth for the Hivemind CLI (TOML).
 #
-# The CLI generates the container's env from this file. Resolution order:
+# The CLI generates the stack runtime env from this file. Resolution order:
 #   built-in defaults < ~/.hivemind.conf < environment overrides
 #
 # Secrets NEVER go in this file.
@@ -9,61 +9,66 @@
 username = "alice"
 
 # ---------------------------------------------------------------------------
-# Mount backend — how the shared hive/ folder gets into the app container.
-# Optional; defaults to "rclone".
+# Deploy backend — how the stack is run. Optional; defaults to "nix".
 #
-#   "rclone"         Mount Google Drive with the rclone FUSE container. Needs a
-#                    Drive OAuth token (created by `hivemind setup`, stored in
-#                    ~/.hivemind/rclone.conf). Requires `gdrive_folder_url`.
+#   "nix"     Run postgres + the app natively via Nix + process-compose (no
+#             Docker). The default on macOS. Requires mount_backend =
+#             "gdrive_desktop". If the nix binary is not installed, the CLI
+#             transparently falls back to the "docker" backend.
+#
+#   "docker"  Run the stack with Docker Compose. Works with either mount backend.
+# ---------------------------------------------------------------------------
+deploy_backend = "nix"
+
+# ---------------------------------------------------------------------------
+# Mount backend — how the shared hive/ folder is reached. Optional; defaults to
+# "rclone". The "nix" deploy backend requires "gdrive_desktop".
 #
 #   "gdrive_desktop" Use Google Drive for Desktop (the official app) to sync the
-#                    folder locally, and bind-mount it directly — no rclone, no
-#                    OAuth client_id/secret, no token on disk. Requires
-#                    `gdrive_desktop_path`.
+#                    folder locally; the stack reads it directly — no rclone, no
+#                    OAuth, no token on disk. Requires gdrive_desktop_path.
+#
+#   "rclone"         (docker backend only) Mount Google Drive with the rclone
+#                    FUSE container. Needs a Drive OAuth token (created by
+#                    hivemind setup). Requires gdrive_folder_url.
 # ---------------------------------------------------------------------------
-mount_backend = "rclone"
+mount_backend = "gdrive_desktop"
 
-# --- rclone backend -------------------------------------------------------
-# Required when mount_backend = "rclone". Any Drive folder URL for the shared
-# `hivemind/` folder; the folder id is extracted from /folders/<id> or ?id=<id>.
-gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz"
-
-# --- gdrive_desktop backend ----------------------------------------------
+# --- gdrive_desktop backend (default) ------------------------------------
 # Required when mount_backend = "gdrive_desktop". Absolute host path to the
-# `hivemind/` folder INSIDE your Google Drive for Desktop mount. Examples:
-#   macOS:   "/Users/alice/Library/CloudStorage/GoogleDrive-alice@corp.com/My Drive/hivemind"
-#   Windows: "G:\\My Drive\\hivemind"
-#   Linux:   "/home/alice/GoogleDrive/My Drive/hivemind"  (via a Drive client)
-# gdrive_desktop_path = "/Users/alice/Library/CloudStorage/GoogleDrive-alice@corp.com/My Drive/hivemind"
+# hivemind/ folder INSIDE your Google Drive for Desktop mount (macOS example):
+gdrive_desktop_path = "/Users/alice/Library/CloudStorage/GoogleDrive-alice@corp.com/My Drive/hivemind"
+
+# --- rclone backend (docker only) ----------------------------------------
+# Required when mount_backend = "rclone". Any Drive folder URL for the shared
+# hivemind/ folder; the folder id is extracted from /folders/<id> or ?id=<id>.
+# gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz"
 
 # ---------------------------------------------------------------------------
-# Optional, both backends.
+# Optional, all backends.
 # ---------------------------------------------------------------------------
 
 # MCP port on localhost (default 7777, range 1..65535).
 mcp_port = 7777
 
-# Explicit roster of member handles. Omit to use the admin-managed roster.json
-# in the shared hive folder.
+# Explicit roster of member handles. Omit to use the admin-managed roster.json.
 # roster = ["alice", "bob", "cara"]
 
-# Host mount path used by the rclone FUSE backend (default "/mnt/hivemind").
-# Ignored by the gdrive_desktop backend (which binds gdrive_desktop_path).
+# Host mount path for the rclone FUSE backend (default "/mnt/hivemind"); ignored
+# by gdrive_desktop.
 # mount_path = "/mnt/hivemind"
 
 # Loop intervals in seconds (default 60 each).
 # export_interval_sec = 60
 # import_interval_sec = 60
 
-# Semantic-search embeddings (default true). The app image is built LOCALLY from
-# source bundled in this package — never pulled from a registry.
-#   true  -> bakes the real embedder (BAAI/bge-small-en-v1.5 via fastembed/onnx,
-#            no torch) plus its small ONNX model into the image; the first
-#            `hivemind up` build is ~1 min and the first query is instant.
-#   false -> a lean, model-free image using a deterministic fake embedder
-#            (EMBEDDING_MODEL=fake) — instant, good for offline/testing/quick trials.
+# Semantic-search embeddings (default true).
+#   true  -> real embedder (BAAI/bge-small-en-v1.5 via fastembed/onnx). Under the
+#            nix backend the model is fetched once into ~/.hivemind/nix-state and
+#            reused offline thereafter.
+#   false -> deterministic fake embedder (EMBEDDING_MODEL=fake) — instant, for
+#            offline/testing/quick trials.
 # embeddings = true
 
-# App image tag (default = CLI package version). A stack change ships as a new
-# package version, so the image rebuilds automatically on upgrade.
+# App image tag for the docker backend (default = CLI version).
 # image_tag = "0.1.0"

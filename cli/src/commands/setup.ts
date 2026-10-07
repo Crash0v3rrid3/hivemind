@@ -12,6 +12,7 @@ import path from 'node:path';
 import type { Command } from 'commander';
 import { ConfigError, hostHivePath, loadResolvedConfig, type ResolvedConfig } from '../config.js';
 import { stageAppSource, writeGeneratedFiles } from '../generate.js';
+import { effectiveBackend, nixBuildUp } from '../nix.js';
 import { rcloneConfPath } from '../paths.js';
 
 /** Stage the bundled app source into ~/.hivemind/app; returns 0 on success. */
@@ -115,6 +116,38 @@ function runSetupGdriveDesktop(cfg: ResolvedConfig): number {
   return 0;
 }
 
+/**
+ * Nix backend (macOS default): no rclone/compose/.env. Verify the gdrive_desktop
+ * hive folder, stage the app flake, and pre-build the stack so the first
+ * `hivemind up` is fast. The flake sets all runtime env itself at `up` time.
+ */
+function runSetupNix(cfg: ResolvedConfig): number {
+  if (cfg.mountBackend !== 'gdrive_desktop') {
+    console.error(
+      'deploy_backend="nix" requires mount_backend="gdrive_desktop" ' +
+        '(set it in ~/.hivemind.conf, or use deploy_backend="docker").',
+    );
+    return 1;
+  }
+  const hive = cfg.gdriveDesktopPath as string;
+  console.log(`Google Drive for Desktop hive folder: ${hive}`);
+  if (!existsSync(hive)) {
+    console.warn(
+      `Google Drive for Desktop folder not found at ${hive} — is Drive for Desktop ` +
+        'running and the hivemind/ folder synced? Continuing; the app will pick it up once it appears.',
+    );
+  }
+  const staged = stageApp();
+  if (staged !== 0) return staged;
+  console.log('Pre-building the Nix stack (fetches postgres + app closure once)...');
+  if (nixBuildUp() !== 0) {
+    console.warn('nix build did not complete cleanly; `hivemind up` will retry it.');
+  }
+  verifyAcls(cfg);
+  console.log('\nSetup complete. Start the stack with: hivemind up');
+  return 0;
+}
+
 /** Run the full setup flow. Returns a process exit code (0 = ok). */
 export function runSetup(): number {
   let cfg: ResolvedConfig;
@@ -130,6 +163,14 @@ export function runSetup(): number {
 
   console.log(`Owner handle: ${cfg.ownerHandle}`);
   console.log(`Mount backend: ${cfg.mountBackend}`);
+
+  const { backend, note } = effectiveBackend(cfg);
+  if (note) console.warn(note);
+  console.log(`Deploy backend: ${backend}`);
+
+  if (backend === 'nix') {
+    return runSetupNix(cfg);
+  }
 
   if (cfg.mountBackend === 'gdrive_desktop') {
     return runSetupGdriveDesktop(cfg);

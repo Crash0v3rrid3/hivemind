@@ -92,11 +92,20 @@ npx -y @browserstack/hivemind doctor
 `~/.hivemind.conf` (TOML) is the only file you edit by hand:
 
 ```toml
-username          = "alice"
-mount_backend     = "rclone"                        # or "gdrive_desktop"
-gdrive_folder_url = "https://drive.google.com/drive/folders/1AbCd...Xyz"
-mcp_port          = 7777
+username            = "alice"
+deploy_backend      = "nix"                 # or "docker"; nix requires gdrive_desktop
+mount_backend       = "gdrive_desktop"      # or "rclone" (docker backend only)
+gdrive_desktop_path = "/Users/alice/Library/CloudStorage/GoogleDrive-alice@corp.com/My Drive/hivemind"
+mcp_port            = 7777
 ```
+
+**Choose a deploy backend** for running the stack:
+
+- `nix` (default, macOS) — runs Postgres + the app natively via Nix + `process-compose`, no Docker.
+  Requires `mount_backend = "gdrive_desktop"`. If `nix` isn't installed, the CLI transparently falls
+  back to `docker`. The runtime is the bundled app flake (`app/flake.nix`); state lives in
+  `~/.hivemind/nix-state`, and the embedding model is fetched once and reused offline.
+- `docker` — runs the stack with Docker Compose. Works with either mount backend.
 
 **Choose a mount backend** for getting the shared Drive folder onto the node:
 

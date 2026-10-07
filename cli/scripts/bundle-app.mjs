@@ -16,7 +16,9 @@ const repoRoot = join(cliRoot, '..');
 const appSrc = join(repoRoot, 'app');
 const dest = join(cliRoot, 'app');
 
-const INCLUDE = ['Dockerfile', 'pyproject.toml', 'README.md', 'hivemind_app'];
+// flake.nix/flake.lock power the Nix (process-compose) backend; Dockerfile powers
+// the Docker backend. Both ship so the package serves either, self-sufficiently.
+const INCLUDE = ['Dockerfile', 'flake.nix', 'flake.lock', 'pyproject.toml', 'README.md', 'hivemind_app'];
 
 if (!existsSync(appSrc)) {
   console.error(`bundle-app: source app dir not found at ${appSrc}`);
