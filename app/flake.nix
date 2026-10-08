@@ -45,10 +45,10 @@
           };
         };
 
-      # process-compose config. Everything is env-driven (no build-time interpolation)
-      # so one config serves dev and real nodes: postgres/db_init/app read
-      # $PGDATA/$SOCK/$PGPORT/$PGUSER_NAME/$APP_BIN/$MCP_PORT from the environment that
-      # hivemind-up exports (process-compose children inherit it).
+      # process-compose config (primary supervisor). Everything is env-driven so
+      # one config serves dev and real nodes; postgres/db_init/app read
+      # $PGDATA/$SOCK/$PGPORT/$PGUSER_NAME/$APP_BIN/$MCP_PORT from the environment
+      # that hivemind-up exports (process-compose children inherit it).
       mkComposeFile = pkgs: pkgs.writeText "hivemind-process-compose.yaml" ''
 version: "0.5"
 processes:
@@ -56,6 +56,7 @@ processes:
     command: |
       if [ ! -f "$PGDATA/PG_VERSION" ]; then
         initdb --auth=trust -U "$PGUSER_NAME" -D "$PGDATA" >/dev/null
+        echo "CREATE DATABASE hivemind;" | postgres --single -D "$PGDATA" postgres >/dev/null
       fi
       exec postgres -D "$PGDATA" -p "$PGPORT" -k "$SOCK" -c listen_addresses=127.0.0.1
     readiness_probe:
@@ -63,20 +64,14 @@ processes:
         command: "pg_isready -h 127.0.0.1 -p $PGPORT -d postgres"
       period_seconds: 1
       failure_threshold: 60
-  db_init:
-    command: "createdb -h 127.0.0.1 -p $PGPORT hivemind || true"
-    depends_on:
-      postgres:
-        condition: process_healthy
-    availability:
-      restart: "no"
   app:
     command: "exec $APP_BIN"
     depends_on:
       postgres:
         condition: process_healthy
-      db_init:
-        condition: process_completed_successfully
+    availability:
+      restart: on_failure
+      backoff_seconds: 2
     readiness_probe:
       exec:
         command: "curl -sf http://127.0.0.1:$MCP_PORT/healthz"
@@ -84,23 +79,78 @@ processes:
       failure_threshold: 60
 '';
 
-      # Lifecycle scripts. writeShellScriptBin (not writeShellApplication) avoids the
-      # shellcheck gate on these embedded scripts; PATH is set explicitly.
       mkRuntime = pkgs:
         let
           pg = pkgs.postgresql.withPackages (p: [ p.pgvector ]);
-          binPath = pkgs.lib.makeBinPath [ pg pkgs.process-compose pkgs.coreutils pkgs.curl ];
+          curl = pkgs.curl;
+          binPath = pkgs.lib.makeBinPath [ pg pkgs.process-compose pkgs.devenv pkgs.coreutils curl ];
           cfg = mkComposeFile pkgs;
           appFake = mkApp pkgs { withEmbeddings = false; };
           appReal = mkApp pkgs { withEmbeddings = true; };
-          stateHead = ''
+
+          # devenv FALLBACK supervisor: mirrors the same three processes via
+          # devenv.processes (devenv runs them through its own process-compose, so
+          # it works even when a standalone process-compose binary is absent). The
+          # dynamic env arrives via dotenv (hivemind-up writes .env). Binaries are
+          # baked as absolute store paths so the stack is byte-identical to the
+          # process-compose path.
+          devenvNix = pkgs.writeText "devenv.nix" ''
+{ ... }:
+{
+  dotenv.enable = true;
+  processes.postgres = {
+    exec = "if [ ! -f \"$PGDATA/PG_VERSION\" ]; then ${pg}/bin/initdb --auth=trust -U \"$PGUSER_NAME\" -D \"$PGDATA\" >/dev/null; echo \"CREATE DATABASE hivemind;\" | ${pg}/bin/postgres --single -D \"$PGDATA\" postgres >/dev/null; fi; exec ${pg}/bin/postgres -D \"$PGDATA\" -p \"$PGPORT\" -k \"$SOCK\" -c listen_addresses=127.0.0.1";
+    process-compose = {
+      readiness_probe.exec.command = "${pg}/bin/pg_isready -h 127.0.0.1 -p $PGPORT -d postgres";
+      readiness_probe.period_seconds = 1;
+      readiness_probe.failure_threshold = 60;
+    };
+  };
+  processes.app = {
+    exec = "exec $APP_BIN";
+    process-compose = {
+      depends_on.postgres.condition = "process_healthy";
+      availability.restart = "on_failure";
+      availability.backoff_seconds = 2;
+      readiness_probe.exec.command = "${curl}/bin/curl -sf http://127.0.0.1:$MCP_PORT/healthz";
+      readiness_probe.period_seconds = 2;
+      readiness_probe.failure_threshold = 60;
+    };
+  };
+}
+'';
+          devenvYaml = pkgs.writeText "devenv.yaml" ''
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/nixpkgs-unstable
+'';
+          devenvProject = pkgs.runCommand "hivemind-devenv-project" { } ''
+            mkdir -p $out
+            cp ${devenvNix} $out/devenv.nix
+            cp ${devenvYaml} $out/devenv.yaml
+          '';
+
+          commonHead = ''
             set -euo pipefail
             export PATH="${binPath}:$PATH"
             STATE_DIR="''${HIVEMIND_NIX_STATE:-$HOME/.local/state/hivemind-nix}"
             PC_SOCKET="''${HIVEMIND_PC_SOCKET:-$STATE_DIR/pc.sock}"
+            DEVENV_DIR="$STATE_DIR/devenv"
+            resolve_supervisor() {
+              local s="''${HIVEMIND_SUPERVISOR:-auto}"
+              if [ "$s" = "auto" ]; then
+                if command -v process-compose >/dev/null 2>&1; then s=process-compose; else s=devenv; fi
+              fi
+              printf '%s' "$s"
+            }
           '';
+
           up = pkgs.writeShellScriptBin "hivemind-up" ''
-            ${stateHead}
+            ${commonHead}
+            DETACH=0
+            case "''${1:-}" in
+              -D|-d|--detach|--detached) DETACH=1; shift ;;
+            esac
             export PGDATA="$STATE_DIR/pgdata"
             export SOCK="$STATE_DIR/sock"
             export PGPORT="''${HIVEMIND_PGPORT:-5444}"
@@ -125,19 +175,71 @@ processes:
               export APP_BIN="${appReal}/bin/hivemind-app"
             fi
             mkdir -p "$PGDATA" "$SOCK" "$HIVE_DIR/$OWNER" "$FASTEMBED_CACHE_PATH"
-            echo "hivemind-up: state=$STATE_DIR pg=127.0.0.1:$PGPORT mcp=127.0.0.1:$MCP_PORT owner=$OWNER embedder=$EMBEDDING_MODEL socket=$PC_SOCKET"
-            exec process-compose -t=false -U -u "$PC_SOCKET" -f ${cfg} up "$@"
+            SUP=$(resolve_supervisor)
+            printf '%s' "$SUP" > "$STATE_DIR/supervisor"
+            echo "hivemind-up: state=$STATE_DIR pg=127.0.0.1:$PGPORT mcp=127.0.0.1:$MCP_PORT owner=$OWNER embedder=$EMBEDDING_MODEL supervisor=$SUP"
+            if [ "$SUP" = "devenv" ]; then
+              mkdir -p "$DEVENV_DIR"
+              cp -f ${devenvProject}/devenv.nix "$DEVENV_DIR/devenv.nix"
+              cp -f ${devenvProject}/devenv.yaml "$DEVENV_DIR/devenv.yaml"
+              chmod u+w "$DEVENV_DIR/devenv.nix" "$DEVENV_DIR/devenv.yaml"
+              {
+                echo "PGDATA=$PGDATA"
+                echo "SOCK=$SOCK"
+                echo "PGPORT=$PGPORT"
+                echo "PGUSER_NAME=$PGUSER_NAME"
+                echo "HIVEMIND_PATH=$HIVEMIND_PATH"
+                echo "OWNER_HANDLE=$OWNER_HANDLE"
+                echo "ROSTER=$ROSTER"
+                echo "DATABASE_URL=$DATABASE_URL"
+                echo "EMBEDDING_MODEL=$EMBEDDING_MODEL"
+                echo "EMBEDDING_DIM=$EMBEDDING_DIM"
+                echo "MCP_HOST=$MCP_HOST"
+                echo "MCP_PORT=$MCP_PORT"
+                echo "EXPORT_INTERVAL_SEC=$EXPORT_INTERVAL_SEC"
+                echo "IMPORT_INTERVAL_SEC=$IMPORT_INTERVAL_SEC"
+                echo "FASTEMBED_CACHE_PATH=$FASTEMBED_CACHE_PATH"
+                echo "APP_BIN=$APP_BIN"
+              } > "$DEVENV_DIR/.env"
+              cd "$DEVENV_DIR"
+              if [ "$DETACH" = 1 ]; then exec devenv up -d; else exec devenv up; fi
+            else
+              if [ "$DETACH" = 1 ]; then
+                exec process-compose -t=false -U -u "$PC_SOCKET" -f ${cfg} up -D
+              else
+                exec process-compose -t=false -U -u "$PC_SOCKET" -f ${cfg} up
+              fi
+            fi
           '';
+
           down = pkgs.writeShellScriptBin "hivemind-down" ''
-            ${stateHead}
-            exec process-compose -U -u "$PC_SOCKET" down "$@"
+            ${commonHead}
+            SUP=$(cat "$STATE_DIR/supervisor" 2>/dev/null || resolve_supervisor)
+            if [ "$SUP" = "devenv" ]; then
+              cd "$DEVENV_DIR" 2>/dev/null || { echo "no devenv project at $DEVENV_DIR (nothing to stop)"; exit 0; }
+              exec devenv processes down
+            else
+              exec process-compose -U -u "$PC_SOCKET" down
+            fi
           '';
+
           status = pkgs.writeShellScriptBin "hivemind-status" ''
-            ${stateHead}
-            exec process-compose -U -u "$PC_SOCKET" process list "$@"
+            ${commonHead}
+            SUP=$(cat "$STATE_DIR/supervisor" 2>/dev/null || resolve_supervisor)
+            if [ "$SUP" = "devenv" ]; then
+              echo "supervisor: devenv (process list not exposed; run hivemind doctor for health)"
+              exit 0
+            fi
+            exec process-compose -U -u "$PC_SOCKET" process list
           '';
+
           logs = pkgs.writeShellScriptBin "hivemind-logs" ''
-            ${stateHead}
+            ${commonHead}
+            SUP=$(cat "$STATE_DIR/supervisor" 2>/dev/null || resolve_supervisor)
+            if [ "$SUP" = "devenv" ]; then
+              echo "supervisor: devenv (per-process logs not exposed here; see $DEVENV_DIR/.devenv)"
+              exit 0
+            fi
             exec process-compose -U -u "$PC_SOCKET" process logs "$@"
           '';
         in { inherit up down status logs; };
@@ -182,6 +284,7 @@ processes:
                 ])))
               (pkgs.postgresql.withPackages (p: [ p.pgvector ]))
               pkgs.process-compose
+              pkgs.devenv
               pkgs.curl
             ];
           };

@@ -104,7 +104,9 @@ mcp_port            = 7777
 - `nix` (default, macOS) — runs Postgres + the app natively via Nix + `process-compose`, no Docker.
   Requires `mount_backend = "gdrive_desktop"`. If `nix` isn't installed, the CLI transparently falls
   back to `docker`. The runtime is the bundled app flake (`app/flake.nix`); state lives in
-  `~/.hivemind/nix-state`, and the embedding model is fetched once and reused offline.
+  `~/.hivemind/nix-state`, and the embedding model is fetched once and reused offline. Within
+  the nix backend, `process-compose` supervises the stack; if it is unavailable the stack falls
+  back to `devenv` (force either with `HIVEMIND_SUPERVISOR=process-compose|devenv`).
 - `docker` — runs the stack with Docker Compose. Works with either mount backend.
 
 **Choose a mount backend** for getting the shared Drive folder onto the node:
