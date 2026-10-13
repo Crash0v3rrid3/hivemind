@@ -103,6 +103,29 @@ def _record_to_values(record: EventRecord) -> dict[str, object]:
     }
 
 
+def _dedupe_by_id(records: list[EventRecord]) -> list[EventRecord]:
+    """Last-wins dedupe by id, so a single multi-row insert never hits the same
+    conflict target twice within one statement."""
+    seen: dict[uuid.UUID, EventRecord] = {}
+    for record in records:
+        seen[record.id] = record
+    return list(seen.values())
+
+
+async def _insert_team(session: AsyncSession, records: list[EventRecord]) -> int:
+    """One multi-row INSERT ... ON CONFLICT (id) DO NOTHING into team_events.
+
+    Returns the number of rows actually inserted (conflicts excluded).
+    """
+    stmt = (
+        pg_insert(TeamEvent)
+        .values([_record_to_values(r) for r in records])
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    result = await session.execute(stmt)
+    return cast("CursorResult[Any]", result).rowcount or 0
+
+
 class Repository:
     """Async data-access object over the two event tables + bookkeeping."""
 
@@ -119,23 +142,16 @@ class Repository:
             await session.execute(pg_insert(LocalEvent).values(**values))
 
     async def import_records(self, records: list[EventRecord]) -> int:
-        """Insert ingested records into ``team_events`` (ON CONFLICT DO NOTHING).
+        """Bulk-insert ingested records into ``team_events`` (ON CONFLICT DO NOTHING).
 
+        One multi-row INSERT (deduped by id) rather than a statement per record.
         Returns the number of rows actually inserted (new ids).
         """
-        if not records:
+        unique = _dedupe_by_id(records)
+        if not unique:
             return 0
-        inserted = 0
         async with self._sessionmaker() as session, session.begin():
-            for record in records:
-                stmt = (
-                    pg_insert(TeamEvent)
-                    .values(**_record_to_values(record))
-                    .on_conflict_do_nothing(index_elements=["id"])
-                )
-                result = await session.execute(stmt)
-                inserted += cast("CursorResult[Any]", result).rowcount or 0
-        return inserted
+            return await _insert_team(session, unique)
 
     async def is_file_ingested(self, path: str) -> bool:
         async with self._sessionmaker() as session:
@@ -150,6 +166,28 @@ class Repository:
                 .on_conflict_do_nothing(index_elements=["path"])
             )
             await session.execute(stmt)
+
+    async def import_file(self, records: list[EventRecord], path: str) -> int:
+        """Insert a file's records AND mark the file ingested in ONE transaction.
+
+        Batched multi-row insert (deduped by id); the file is always recorded as
+        ingested — even when it yields zero new rows — so it is never re-read.
+        """
+        unique = _dedupe_by_id(records)
+        async with self._sessionmaker() as session, session.begin():
+            inserted = await _insert_team(session, unique) if unique else 0
+            await session.execute(
+                pg_insert(IngestedFile)
+                .values(path=path)
+                .on_conflict_do_nothing(index_elements=["path"])
+            )
+        return inserted
+
+    async def list_ingested_files(self) -> set[str]:
+        """Return every ingested file path in one query (replaces N point gets)."""
+        async with self._sessionmaker() as session:
+            rows = (await session.execute(select(IngestedFile.path))).scalars().all()
+            return set(rows)
 
     async def list_unexported_local(self) -> list[EventRecord]:
         """Return unexported local records ordered by ``created_at`` ascending."""

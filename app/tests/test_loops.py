@@ -210,6 +210,35 @@ async def test_import_multiple_members(  # type: ignore[no-untyped-def]
     assert authors == {"bob", "cara"}
 
 
+async def test_import_uses_one_bulk_ingested_query(  # type: ignore[no-untyped-def]
+    fake_repo, identity, hive_root, make_record
+) -> None:
+    # The hot path must issue ONE ingested-set query per cycle and ZERO per-file
+    # point lookups (the old O(files) query pattern).
+    calls = {"list": 0, "per_file": 0}
+    orig_list = fake_repo.list_ingested_files
+    orig_is = fake_repo.is_file_ingested
+
+    async def counting_list() -> set[str]:
+        calls["list"] += 1
+        return await orig_list()
+
+    async def counting_is(path: str) -> bool:
+        calls["per_file"] += 1
+        return await orig_is(path)
+
+    fake_repo.list_ingested_files = counting_list
+    fake_repo.is_file_ingested = counting_is
+
+    _write_batch(hive_root / "bob" / "2026-08-19", [make_record(author="bob")])
+    _write_batch(hive_root / "bob" / "2026-08-20", [make_record(author="bob")])
+    inserted = await import_once(fake_repo, identity, hive_root)
+
+    assert inserted == 2
+    assert calls["list"] == 1  # one bulk query for the whole cycle
+    assert calls["per_file"] == 0  # no per-file point lookups
+
+
 async def test_import_missing_hive_root_is_noop(fake_repo, identity, tmp_path) -> None:  # type: ignore[no-untyped-def]
     missing = tmp_path / "does-not-exist"
     inserted = await import_once(fake_repo, identity, missing)

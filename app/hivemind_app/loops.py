@@ -49,6 +49,10 @@ class ExportRepository(RepositoryLike, Protocol):  # pragma: no cover - typing a
 class ImportRepository(RepositoryLike, Protocol):  # pragma: no cover - typing aid
     """Extends the read protocol with the import-specific write methods."""
 
+    async def list_ingested_files(self) -> set[str]: ...
+
+    async def import_file(self, records: list[EventRecord], path: str) -> int: ...
+
     async def is_file_ingested(self, path: str) -> bool: ...
 
     async def mark_file_ingested(self, path: str) -> None: ...
@@ -147,31 +151,37 @@ async def import_once(
     root = Path(hive_root)
     inserted_total = 0
 
+    # Fetch the whole ingested set ONCE per cycle instead of a DB point lookup
+    # per file. Files are immutable and day-bucketed, so a path already in the set
+    # needs no filesystem read and no query.
+    ingested = await repo.list_ingested_files()
+
     for folder in _member_folders(root, identity):
         author = folder.name
         for file_path in _ndjson_files(folder):
             rel = file_path.relative_to(root).as_posix()
+            if rel in ingested:
+                continue  # already ingested -> skip without any IO
             # Defensive: derive author from the folder, ignore the file's field.
             assert author_from_path(rel) == author
-            if await repo.is_file_ingested(rel):
-                continue
             try:
                 text = file_path.read_text(encoding="utf-8")
             except OSError as exc:  # pragma: no cover - filesystem race
                 log.warning("hivemind.import.read_error", path=rel, error=str(exc))
-                continue
+                continue  # transient; retried next cycle (not marked)
 
             try:
                 records = parse_ndjson(text)
             except Exception as exc:
                 log.warning("hivemind.import.parse_error", path=rel, error=str(exc))
-                continue
+                continue  # retried next cycle (not marked)
 
-            # Stamp the authoritative author from the read-only folder.
+            # Stamp the authoritative author from the read-only folder, then insert
+            # records + mark the file ingested in a SINGLE transaction.
             stamped = [_with_author(r, author) for r in records]
-            inserted = await repo.import_records(stamped)
+            inserted = await repo.import_file(stamped, rel)
+            ingested.add(rel)
             inserted_total += inserted
-            await repo.mark_file_ingested(rel)
             log.info(
                 "hivemind.import.file",
                 path=rel,

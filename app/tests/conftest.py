@@ -156,6 +156,14 @@ class FakeRepository:
     async def mark_file_ingested(self, path: str) -> None:
         self.ingested_paths.add(path)
 
+    async def list_ingested_files(self) -> set[str]:
+        return set(self.ingested_paths)
+
+    async def import_file(self, records: list[EventRecord], path: str) -> int:
+        inserted = await self.import_records(records)
+        self.ingested_paths.add(path)
+        return inserted
+
     async def list_unexported_local(self) -> list[EventRecord]:
         rows = [r for r in self.local if r.id not in self.exported_ids]
         rows.sort(key=lambda r: r.created_at)
