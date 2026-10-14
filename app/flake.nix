@@ -221,7 +221,9 @@ inputs:
               exec devenv processes down
             else
               if ! pc_daemon_alive; then echo "Hivemind stack is not running (nothing to stop)."; exit 0; fi
-              exec process-compose -U -u "$PC_SOCKET" down
+              process-compose -U -u "$PC_SOCKET" down 2>/dev/null && exit 0
+              echo "Could not reach the stack to stop it — it may already be down."
+              exit 0
             fi
           '';
 
@@ -233,7 +235,9 @@ inputs:
               exit 0
             fi
             if ! pc_daemon_alive; then echo "Hivemind stack is not running or not reachable — start it with: hivemind up" >&2; exit 1; fi
-            exec process-compose -U -u "$PC_SOCKET" process list
+            process-compose -U -u "$PC_SOCKET" process list 2>/dev/null && exit 0
+            echo "Could not reach the Hivemind stack — it may be down or restarting. Start it with: hivemind up" >&2
+            exit 1
           '';
 
           logs = pkgs.writeShellScriptBin "hivemind-logs" ''
@@ -244,7 +248,9 @@ inputs:
               exit 0
             fi
             if ! pc_daemon_alive; then echo "Hivemind stack is not running or not reachable — start it with: hivemind up" >&2; exit 1; fi
-            exec process-compose -U -u "$PC_SOCKET" process logs "$@"
+            process-compose -U -u "$PC_SOCKET" process logs "$@" 2>/dev/null && exit 0
+            echo "Could not stream logs — the Hivemind stack may be down or restarting. Check: hivemind status (or start it: hivemind up)" >&2
+            exit 1
           '';
         in { inherit up down status logs; };
     in
