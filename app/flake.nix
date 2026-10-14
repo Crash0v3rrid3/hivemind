@@ -83,6 +83,7 @@ processes:
         let
           pg = pkgs.postgresql.withPackages (p: [ p.pgvector ]);
           curl = pkgs.curl;
+          cacertBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           binPath = pkgs.lib.makeBinPath [ pg pkgs.process-compose pkgs.devenv pkgs.coreutils curl ];
           cfg = mkComposeFile pkgs;
           appFake = mkApp pkgs { withEmbeddings = false; };
@@ -170,6 +171,13 @@ inputs:
             export EXPORT_INTERVAL_SEC="''${EXPORT_INTERVAL_SEC:-30}"
             export IMPORT_INTERVAL_SEC="''${IMPORT_INTERVAL_SEC:-30}"
             export FASTEMBED_CACHE_PATH="''${FASTEMBED_CACHE_PATH:-$STATE_DIR/fastembed-cache}"
+            # The app fetches the embedding model over HTTPS on first use; without a CA
+            # bundle, Python TLS fails with a cryptic ENOENT ("No such file or directory").
+            # Force a valid bundle unless the caller supplied one that actually exists.
+            if [ -z "''${SSL_CERT_FILE:-}" ] || [ ! -f "''${SSL_CERT_FILE:-}" ]; then
+              export SSL_CERT_FILE="${cacertBundle}"
+            fi
+            export NIX_SSL_CERT_FILE="''${NIX_SSL_CERT_FILE:-$SSL_CERT_FILE}"
             if [ "$EMBEDDING_MODEL" = "fake" ]; then
               export APP_BIN="${appFake}/bin/hivemind-app"
             else
