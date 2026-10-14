@@ -143,6 +143,7 @@ inputs:
               fi
               printf '%s' "$s"
             }
+            pc_socket_present() { [ -S "$PC_SOCKET" ]; }
           '';
 
           up = pkgs.writeShellScriptBin "hivemind-up" ''
@@ -219,6 +220,7 @@ inputs:
               cd "$DEVENV_DIR" 2>/dev/null || { echo "no devenv project at $DEVENV_DIR (nothing to stop)"; exit 0; }
               exec devenv processes down
             else
+              if ! pc_socket_present; then echo "Hivemind stack is not running (no control socket at $PC_SOCKET)."; exit 0; fi
               exec process-compose -U -u "$PC_SOCKET" down
             fi
           '';
@@ -230,6 +232,7 @@ inputs:
               echo "supervisor: devenv (process list not exposed; run hivemind doctor for health)"
               exit 0
             fi
+            if ! pc_socket_present; then echo "Hivemind stack is not running (no control socket at $PC_SOCKET) — start it with: hivemind up" >&2; exit 1; fi
             exec process-compose -U -u "$PC_SOCKET" process list
           '';
 
@@ -240,6 +243,7 @@ inputs:
               echo "supervisor: devenv (per-process logs not exposed here; see $DEVENV_DIR/.devenv)"
               exit 0
             fi
+            if ! pc_socket_present; then echo "Hivemind stack is not running (no control socket at $PC_SOCKET) — start it with: hivemind up" >&2; exit 1; fi
             exec process-compose -U -u "$PC_SOCKET" process logs "$@"
           '';
         in { inherit up down status logs; };
