@@ -244,11 +244,21 @@ inputs:
               exit 0
             fi
             if ! pc_daemon_alive; then echo "Hivemind stack is not running or not reachable — start it with: hivemind up" >&2; exit 1; fi
+            # Follow streams directly; one-shot captures to a temp file first so output is
+            # reliable whether stdout is a TTY or a pipe. process-compose's streaming
+            # `process logs` emits nothing and exits non-zero when its stdout pipe closes
+            # early (e.g. under npx/pmg wrappers); writing to a file then `cat` avoids that,
+            # exactly like the non-streaming `process list` (status) which works fine.
             case " $* " in
-              *" -f "*|*" --follow "*|*" -n "*|*" --tail "*) ;;
-              *) set -- "$@" -n 200 ;;
+              *" -f "*|*" --follow "*)
+                exec process-compose -U -u "$PC_SOCKET" process logs "$@" 2>/dev/null
+                ;;
             esac
-            exec process-compose -U -u "$PC_SOCKET" process logs "$@" 2>/dev/null
+            case " $* " in *" -n "*|*" --tail "*) ;; *) set -- "$@" -n 200 ;; esac
+            tmp=$(mktemp "''${TMPDIR:-/tmp}/hivemind-logs.XXXXXX")
+            process-compose -U -u "$PC_SOCKET" process logs "$@" >"$tmp" 2>/dev/null || true
+            cat "$tmp"
+            rm -f "$tmp"
           '';
         in { inherit up down status logs; };
     in
