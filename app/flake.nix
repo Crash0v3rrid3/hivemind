@@ -84,6 +84,25 @@ processes:
           pg = pkgs.postgresql.withPackages (p: [ p.pgvector ]);
           curl = pkgs.curl;
           cacertBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          # Content-addressed, pinned copy of the embedding model (fully offline). A
+          # fixed-output derivation is allowed network at build time; it populates the
+          # fastembed/HF cache layout once, hashed, so every node reuses the exact bytes
+          # with no runtime download. Lock files are stripped for a deterministic output.
+          modelPy = pkgs.python3.withPackages (ps: [ ps.fastembed ]);
+          hivemindModel = pkgs.runCommand "hivemind-bge-small-en-v1.5" {
+            nativeBuildInputs = [ modelPy ];
+            outputHashMode = "recursive";
+            outputHashAlgo = "sha256";
+            outputHash = "sha256-H4YTiwY2O3ECxWH8ZNtpWmqiSLUK1J4ONCSP5kpR+Fc=";
+            SSL_CERT_FILE = cacertBundle;
+          } ''
+            export HOME="$TMPDIR"
+            export FASTEMBED_CACHE_PATH="$out"
+            mkdir -p "$out"
+            python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+            rm -rf "$out/.locks" || true
+            find "$out" -name '*.lock' -delete 2>/dev/null || true
+          '';
           binPath = pkgs.lib.makeBinPath [ pg pkgs.process-compose pkgs.devenv pkgs.coreutils curl ];
           cfg = mkComposeFile pkgs;
           appFake = mkApp pkgs { withEmbeddings = false; };
@@ -182,6 +201,17 @@ inputs:
               export APP_BIN="${appFake}/bin/hivemind-app"
             else
               export APP_BIN="${appReal}/bin/hivemind-app"
+              # Seed the pinned, content-addressed model into the cache and run offline, so
+              # the real embedder works with no runtime download. Only for the default model;
+              # a custom EMBEDDING_MODEL still downloads (via the baked CA bundle above).
+              if [ "$EMBEDDING_MODEL" = "BAAI/bge-small-en-v1.5" ]; then
+                if [ ! -e "$FASTEMBED_CACHE_PATH/models--qdrant--bge-small-en-v1.5-onnx-q" ]; then
+                  mkdir -p "$FASTEMBED_CACHE_PATH"
+                  cp -R ${hivemindModel}/. "$FASTEMBED_CACHE_PATH"/
+                  chmod -R u+w "$FASTEMBED_CACHE_PATH"
+                fi
+                export HF_HUB_OFFLINE="''${HF_HUB_OFFLINE:-1}"
+              fi
             fi
             mkdir -p "$PGDATA" "$SOCK" "$HIVE_DIR/$OWNER" "$FASTEMBED_CACHE_PATH"
             SUP=$(resolve_supervisor)
@@ -268,7 +298,7 @@ inputs:
             cat "$tmp"
             rm -f "$tmp"
           '';
-        in { inherit up down status logs; };
+        in { inherit up down status logs; model = hivemindModel; };
     in
     {
       packages = forAllSystems (pkgs:
@@ -280,6 +310,7 @@ inputs:
           down = rt.down;
           status = rt.status;
           logs = rt.logs;
+          model = rt.model;
         });
 
       apps = forAllSystems (pkgs:
