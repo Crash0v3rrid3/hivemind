@@ -64,11 +64,20 @@ The full data model, file format, loop semantics, MCP tool surface, and invarian
 
 ---
 
+## Requirements
+
+- **macOS** (Apple Silicon or Intel) — Hivemind nodes are developer laptops.
+- **Nix** with flakes enabled (the default `deploy_backend`), **or** **Docker** (`deploy_backend = "docker"`). If `nix` is unavailable the CLI falls back to Docker automatically.
+- **Node.js ≥ 18** to run the CLI via `npx`.
+- **Google Drive for Desktop** syncing a shared `hivemind/` folder: readable by the team, with each member's own subfolder writable (see [SPEC.md](./SPEC.md)).
+- Access to the private `@browserstack` GitHub Packages registry (a GitHub token with `read:packages`).
+
 ## Quickstart (via `npx`)
 
-The CLI is published privately to GitHub Packages, so configure npm for the `@browserstack` scope
-once, then drive everything through `npx`. (Or run `npm i -g @browserstack/hivemind` once and call
-`hivemind <cmd>` directly — this avoids npx re-resolving the package on every call.)
+The CLI is distributed on the private `@browserstack` GitHub Packages registry, so configure npm for
+the `@browserstack` scope once, then drive everything through `npx`. (Or run
+`npm i -g @browserstack/hivemind` once and call `hivemind <cmd>` directly — this avoids npx
+re-resolving the package on every call.)
 
 ```sh
 # 1. Point the @browserstack scope at GitHub Packages and authenticate (needs a GitHub token

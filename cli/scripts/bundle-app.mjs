@@ -6,7 +6,7 @@
 // README.md, hivemind_app/**) — tests, venvs, caches, and compose files are
 // excluded by simply not copying them. Idempotent: the dest is cleaned first.
 import { cp, mkdir, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +23,18 @@ const INCLUDE = ['Dockerfile', 'flake.nix', 'flake.lock', 'pyproject.toml', 'REA
 if (!existsSync(appSrc)) {
   console.error(`bundle-app: source app dir not found at ${appSrc}`);
   process.exit(1);
+}
+
+// Enforce version coupling: a stack change must bump the package version, so the
+// bundled app's version must match the CLI's. Fail the build on drift.
+const pkgVersion = JSON.parse(readFileSync(join(cliRoot, 'package.json'), 'utf8')).version;
+const pyVersion = (readFileSync(join(appSrc, 'pyproject.toml'), 'utf8').match(/^version = "([^"]+)"/m) || [])[1];
+const flakeVersion = (readFileSync(join(appSrc, 'flake.nix'), 'utf8').match(/version = "([^"]+)";/) || [])[1];
+for (const [name, ver] of [['app/pyproject.toml', pyVersion], ['app/flake.nix', flakeVersion]]) {
+  if (ver !== pkgVersion) {
+    console.error(`bundle-app: version drift — cli is ${pkgVersion} but ${name} is ${ver}; keep them in lockstep.`);
+    process.exit(1);
+  }
 }
 
 await rm(dest, { recursive: true, force: true });
