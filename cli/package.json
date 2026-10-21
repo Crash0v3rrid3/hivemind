@@ -15,14 +15,14 @@
   ],
   "license": "MIT",
   "author": "BrowserStack",
-  "homepage": "https://github.com/browserstack/hivemind#readme",
+  "homepage": "https://github.com/browserstack/app-accessibility#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/browserstack/hivemind.git",
+    "url": "git+https://github.com/browserstack/app-accessibility.git",
     "directory": "cli"
   },
   "bugs": {
-    "url": "https://github.com/browserstack/hivemind/issues"
+    "url": "https://github.com/browserstack/app-accessibility/issues"
   },
   "type": "module",
   "bin": {
