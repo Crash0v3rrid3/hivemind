@@ -14,14 +14,14 @@
   ],
   "license": "MIT",
   "author": "Rishab Jain",
-  "homepage": "https://github.com/OWNER/hivemind#readme",
+  "homepage": "https://github.com/Crash0v3rrid3/hivemind#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/hivemind.git",
+    "url": "git+https://github.com/Crash0v3rrid3/hivemind.git",
     "directory": "cli"
   },
   "bugs": {
-    "url": "https://github.com/OWNER/hivemind/issues"
+    "url": "https://github.com/Crash0v3rrid3/hivemind/issues"
   },
   "type": "module",
   "bin": {
