@@ -9,7 +9,7 @@
 //   3. repackages that same file set into a single .zip for convenience.
 //
 // Outputs land in cli/dist-pkg/ (gitignored):
-//   browserstack-hivemind-<version>.tgz   (canonical — `npm publish <tgz>`)
+//   hivemind-<version>.tgz   (canonical — `npm publish <tgz>`)
 //   hivemind-<version>.zip                (single zip of the publishable package/)
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';

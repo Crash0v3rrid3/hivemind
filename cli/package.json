@@ -1,5 +1,5 @@
 {
-  "name": "@browserstack/hivemind",
+  "name": "hivemind",
   "version": "0.1.0",
   "description": "Hivemind host CLI — provisions and operates a local, serverless, append-only shared team memory exposed over MCP.",
   "keywords": [
@@ -10,19 +10,18 @@
     "postgres",
     "pgvector",
     "fastembed",
-    "browserstack",
     "hivemind"
   ],
   "license": "MIT",
-  "author": "BrowserStack",
-  "homepage": "https://github.com/browserstack/app-accessibility#readme",
+  "author": "Rishab Jain",
+  "homepage": "https://github.com/OWNER/hivemind#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/browserstack/app-accessibility.git",
+    "url": "git+https://github.com/OWNER/hivemind.git",
     "directory": "cli"
   },
   "bugs": {
-    "url": "https://github.com/browserstack/app-accessibility/issues"
+    "url": "https://github.com/OWNER/hivemind/issues"
   },
   "type": "module",
   "bin": {
@@ -35,9 +34,6 @@
   ],
   "engines": {
     "node": ">=18"
-  },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-templates.mjs && node scripts/bundle-app.mjs",

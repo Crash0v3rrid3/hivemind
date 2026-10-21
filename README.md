@@ -54,7 +54,7 @@ Two deployables live in this monorepo:
   models, serialization, append-only repository, search service, and the FastMCP tools. Its source
   is **bundled into the CLI package** and the image is **built locally** by `hivemind up` (tagged
   `hivemind:<version>`) — nothing is pulled from a registry.
-- **`cli/`** — the Node/TS host CLI, published as `@browserstack/hivemind`. It never contains team
+- **`cli/`** — the Node/TS host CLI, published as `hivemind`. It never contains team
   data; it *provisions the node*: reads `~/.hivemind.conf`, sets up the rclone mount, generates the
   Compose stack and env, wires Claude (CLAUDE.md block, MCP entry, guard hook), and runs
   `up`/`down`/`doctor`.
@@ -70,32 +70,25 @@ The full data model, file format, loop semantics, MCP tool surface, and invarian
 - **Nix** with flakes enabled (the default `deploy_backend`), **or** **Docker** (`deploy_backend = "docker"`). If `nix` is unavailable the CLI falls back to Docker automatically.
 - **Node.js ≥ 18** to run the CLI via `npx`.
 - **Google Drive for Desktop** syncing a shared `hivemind/` folder: readable by the team, with each member's own subfolder writable (see [SPEC.md](./SPEC.md)).
-- Access to the private `@browserstack` GitHub Packages registry (a GitHub token with `read:packages`).
 
 ## Quickstart (via `npx`)
 
-The CLI is distributed on the private `@browserstack` GitHub Packages registry, so configure npm for
-the `@browserstack` scope once, then drive everything through `npx`. (Or run
-`npm i -g @browserstack/hivemind` once and call `hivemind <cmd>` directly — this avoids npx
+The CLI is published on npm, so drive everything through `npx`. (Or run
+`npm i -g hivemind` once and call `hivemind <cmd>` directly — this avoids npx
 re-resolving the package on every call.)
 
 ```sh
-# 1. Point the @browserstack scope at GitHub Packages and authenticate (needs a GitHub token
-#    with read:packages), e.g. in ~/.npmrc:
-#      @browserstack:registry=https://npm.pkg.github.com
-#      //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+# 1. Scaffold your config (~/.hivemind.conf), then fill in the shared Drive folder + your handle
+npx -y hivemind init
+npx -y hivemind config --edit
 
-# 2. Scaffold your config (~/.hivemind.conf), then fill in the shared Drive folder URL + your handle
-npx -y @browserstack/hivemind init
-npx -y @browserstack/hivemind config --edit
-
-# 3. One-shot: rclone mount + generate the stack, bring it up, verify, and wire Claude
-npx -y @browserstack/hivemind install
+# 2. One-shot: generate the stack, bring it up, verify, and wire Claude
+npx -y hivemind install
 
 # First `up` BUILDS the app image locally from bundled source (no registry). The real embedder is
 # fastembed/onnxruntime (no torch), so the image is small and the first build is ~1 min; reruns reuse it.
-npx -y @browserstack/hivemind status
-npx -y @browserstack/hivemind doctor
+npx -y hivemind status
+npx -y hivemind doctor
 ```
 
 `~/.hivemind.conf` (TOML) is the only file you edit by hand:
@@ -134,12 +127,12 @@ Common lifecycle commands:
 
 | Command | Does |
 |---|---|
-| `npx -y @browserstack/hivemind up` | Regenerate derived files from conf, then start the stack |
-| `npx -y @browserstack/hivemind down` | Stop the stack |
-| `npx -y @browserstack/hivemind uninstall` | Inverse of `install`: stop + unwire Claude (`--purge` also removes local data; never touches the Drive folder) |
-| `npx -y @browserstack/hivemind status` / `logs` | Inspect the running stack |
-| `npx -y @browserstack/hivemind doctor` | Check mount / DB / MCP reachability, ACLs, roster, image tag |
-| `npx -y @browserstack/hivemind admin provision-user <handle> <email>` | Create + share a member's Drive folder |
+| `npx -y hivemind up` | Regenerate derived files from conf, then start the stack |
+| `npx -y hivemind down` | Stop the stack |
+| `npx -y hivemind uninstall` | Inverse of `install`: stop + unwire Claude (`--purge` also removes local data; never touches the Drive folder) |
+| `npx -y hivemind status` / `logs` | Inspect the running stack |
+| `npx -y hivemind doctor` | Check mount / DB / MCP reachability, ACLs, roster, image tag |
+| `npx -y hivemind admin provision-user <handle> <email>` | Create + share a member's Drive folder |
 
 Once `up`, Claude Code sees the `hivemind` MCP server at `http://localhost:<mcp_port>/mcp` and can
 call `memory_add`, `memory_search`, `memory_list_recent`, and the rest of the tool surface.
@@ -187,7 +180,7 @@ folder as the hive, fake embeddings, no Google Drive) and **`docker-compose.prod
 
 ### Node CLI (`cli/`)
 
-- TypeScript (strict), commander, published as `@browserstack/hivemind` (`bin` → `dist/cli.js`).
+- TypeScript (strict), commander, published as `hivemind` (`bin` → `dist/cli.js`).
 - Tooling: `eslint` (typescript-eslint), `prettier`, `vitest`, `tsc`.
 
 ```sh
@@ -209,8 +202,8 @@ your real `~/.claude` or `~/.hivemind`.
 ```
 hivemind/
   app/        Python container app (MCP server + export/import loops)
-  cli/        Node/TS host CLI, published as @browserstack/hivemind
-  .github/    CI (make check on PRs) + release (npm → GitHub Packages, image → GHCR) on tag
+  cli/        Node/TS host CLI, published as hivemind
+  .github/    CI (make check on PRs) + release (npm) on tag
   .claude/    Repo guide + subagents for Claude working in THIS repo
   Makefile    fmt / lint / typecheck / test / check across both packages
   SPEC.md     Implementation spec — the single source of truth
@@ -220,11 +213,11 @@ hivemind/
 ## Releasing
 
 Pushing a tag (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`, which publishes the CLI to
-GitHub Packages. The package is **self-sufficient** — it bundles the app source and `hivemind up`
-builds the image locally — so publishing the app image to GHCR is an **optional** convenience, not
-required at runtime. A stack change ships as a new package version, which rebuilds the local image
+npm. The package is **self-sufficient** — it bundles the app source and `hivemind up` builds the
+image locally — so nothing is pulled from a registry at runtime. A stack change ships as a new
+package version, which rebuilds the local image
 on upgrade. Pull requests run `make check`. See the workflow for details.
 
 ## License
 
-[MIT](./LICENSE) © 2026 BrowserStack.
+[MIT](./LICENSE) © 2026 Rishab Jain.

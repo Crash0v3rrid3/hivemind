@@ -2,7 +2,7 @@
 #
 # Delegates into the two packages:
 #   app/  — Python container app (MCP server + loops); tooled with ruff / mypy / pytest in a venv
-#   cli/  — Node/TS host CLI (@browserstack/hivemind); tooled via npm scripts (prettier/eslint/tsc/vitest)
+#   cli/  — Node/TS host CLI (hivemind); tooled via npm scripts (prettier/eslint/tsc/vitest)
 #
 # Targets: fmt lint typecheck test check
 #   `check` runs the UNIT layer for both packages (integration tests that need Postgres are

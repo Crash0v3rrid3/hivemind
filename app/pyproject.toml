@@ -9,7 +9,7 @@ description = "Hivemind — serverless, append-only, semantically-searchable sha
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "BrowserStack" }]
+authors = [{ name = "Rishab Jain" }]
 dependencies = [
     # Pin to the 1.x SDK: the 2.0 release restructured the package and removed
     # mcp.server.fastmcp (the FastMCP API this app uses).

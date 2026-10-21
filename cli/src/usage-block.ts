@@ -26,7 +26,7 @@ reachable by making a real request: call \`memory_list_recent\` (e.g. \`limit=1\
 the raw result. A valid response — **including an empty list** — proves the backend is
 live. **If the call errors, times out, or the \`hivemind\` tools are missing, STOP — refuse
 to proceed.** Do not edit files, run commands, or analyze the task. Tell the user Hivemind
-is required and unreachable, and to run \`npx -y @browserstack/hivemind up\` (first boot
+is required and unreachable, and to run \`npx -y hivemind up\` (first boot
 takes ~60-90s), then retry.
 
 ### Search before you work

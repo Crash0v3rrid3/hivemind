@@ -1,6 +1,6 @@
 # Hivemind per-node stack.
 #
-# This file is the canonical reference template shipped with @browserstack/hivemind.
+# This file is the canonical reference template shipped with hivemind.
 # `hivemind setup` / `hivemind up` regenerate ~/.hivemind/docker-compose.yml from your
 # resolved ~/.hivemind.conf (the app image tag is pinned to the CLI version at that time).
 # All ${...} values are interpolated by Docker Compose from the sibling ~/.hivemind/.env.
@@ -68,7 +68,7 @@ services:
     restart: unless-stopped
 
   app:
-    image: ghcr.io/browserstack/hivemind:0.1.0
+    image: hivemind:0.1.0
     container_name: hivemind-app
     depends_on:
       gdrive:

@@ -32,7 +32,7 @@ hivemind/
     pyproject.toml             # deps + ruff + mypy(strict) + pytest config; fastembed optional [embeddings] (onnxruntime, no torch)
     Dockerfile                 # ARG INSTALL_EMBEDDINGS: 0=fake embedder (test), 1=real fastembed/onnx (prod)
     README.md                  # short: how to run/test the app
-  cli/                         # Node/TS host CLI, published as @browserstack/hivemind
+  cli/                         # Node/TS host CLI, published as hivemind
     src/
       cli.ts                   # commander entry (bin)
       config.ts                # ~/.hivemind.conf (TOML) load/validate/resolve; folder-id extraction
@@ -355,7 +355,7 @@ named volume, `pg_isready` healthcheck), `app` (built LOCALLY — see below —
 `build: { context: ./app, args: { INSTALL_EMBEDDINGS: "0|1" } }` + `image: hivemind:<version>`.
 `setup`/`up` stage the app source (bundled in the CLI package) into `~/.hivemind/app`, so
 `docker compose up` builds `hivemind:<version>` on first run, reuses it afterwards, and rebuilds
-when a package upgrade bumps the version. No registry (GHCR) is required at runtime. The
+when a package upgrade bumps the version. No registry is required at runtime. The
 `embeddings` config toggle sets `INSTALL_EMBEDDINGS` (1 = real fastembed/onnxruntime embedder with
 the ONNX model baked in — no torch, so the image is small and builds in ~1 min; 0 = lean
 fake-embedder image + `EMBEDDING_MODEL=fake`).
@@ -388,7 +388,7 @@ The **guard hook must never call npx** — install a self-contained `~/.hivemind
 [ "$HIVEMIND_GUARD_DISABLE" = "1" ] && exit 0
 URL="${HIVEMIND_MCP_URL:-http://localhost:7777/mcp}"
 curl -s -m 2 -o /dev/null "$URL" && exit 0
-echo "Hivemind MCP unreachable — run: npx -y @browserstack/hivemind up (first boot ~60-90s)" >&2
+echo "Hivemind MCP unreachable — run: npx -y hivemind up (first boot ~60-90s)" >&2
 exit 1
 ```
 Hook JSON merged (not overwritten) into ~/.claude/settings.json:
@@ -403,10 +403,9 @@ are unit-testable without touching the real home directory.
 
 ## 13. Distribution
 
-CLI published as private `@browserstack/hivemind` on GitHub Packages
-(`publishConfig.registry=https://npm.pkg.github.com`), run via `npx -y @browserstack/hivemind <cmd>`.
+CLI published as `hivemind` on npm, run via `npx -y hivemind <cmd>`.
 `bin` -> `dist/cli.js` (shebang `#!/usr/bin/env node`). Durable state in `~/.hivemind/`.
-Tip: `npm i -g @browserstack/hivemind` installs the `hivemind` binary once and lets you call
+Tip: `npm i -g hivemind` installs the `hivemind` binary once and lets you call
 `hivemind <cmd>` directly, avoiding npx re-resolving the package on every invocation.
 
 **Self-sufficient — the package ships everything to run.** The build bundles the Python app source
@@ -415,9 +414,8 @@ includes `app/`), and `hivemind up` builds the image locally from it. The **imag
 to the CLI package version**: any stack change ships as a new package version, which changes the
 `hivemind:<version>` tag and triggers a rebuild on upgrade. No registry pull is needed at runtime.
 
-GitHub Actions on tag: build+publish npm (NODE_AUTH_TOKEN = GITHUB_TOKEN,
-`permissions: packages: write`). A GHCR image push remains available as an OPTIONAL convenience but
-is NOT required — `up` builds locally.
+GitHub Actions on tag: build + publish the CLI to npm (NODE_AUTH_TOKEN = NPM_TOKEN). The app image
+is always built locally by `up`, so no image registry is involved.
 
 ---
 

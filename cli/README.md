@@ -1,4 +1,4 @@
-# @browserstack/hivemind — host CLI
+# hivemind — host CLI
 
 Provisions and operates a developer's local **Hivemind** node: a serverless,
 append-only, semantically-searchable shared team memory exposed over **MCP**. Each
@@ -8,10 +8,10 @@ Drive folder.
 
 ## Install / run
 
-Published privately on GitHub Packages; run without a global install:
+Published on npm; run without a global install:
 
 ```sh
-npx -y @browserstack/hivemind <command>
+npx -y hivemind <command>
 ```
 
 ## Quickstart

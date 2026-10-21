@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @browserstack/hivemind — host CLI entry point.
+ * hivemind — host CLI entry point.
  *
  * Provisions and operates a local, serverless, append-only shared team memory
  * exposed over MCP. Every command group is registered from src/commands/*.

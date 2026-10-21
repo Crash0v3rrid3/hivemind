@@ -41,7 +41,7 @@ export function guardScriptContent(defaultUrl: string = DEFAULT_MCP_URL): string
 [ "$HIVEMIND_GUARD_DISABLE" = "1" ] && exit 0
 URL="\${HIVEMIND_MCP_URL:-${defaultUrl}}"
 curl -s -m 2 -o /dev/null "$URL" && exit 0
-echo "Hivemind MCP unreachable — run: npx -y @browserstack/hivemind up (first boot ~60-90s)" >&2
+echo "Hivemind MCP unreachable — run: npx -y hivemind up (first boot ~60-90s)" >&2
 exit 1
 `;
 }
@@ -87,7 +87,7 @@ export async function runGuard(
   const ok = await probeMcp(url);
   if (ok) return 0;
   process.stderr.write(
-    'Hivemind MCP unreachable — run: npx -y @browserstack/hivemind up (first boot ~60-90s)\n',
+    'Hivemind MCP unreachable — run: npx -y hivemind up (first boot ~60-90s)\n',
   );
   return 1;
 }
