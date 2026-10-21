@@ -54,7 +54,7 @@ Two deployables live in this monorepo:
   models, serialization, append-only repository, search service, and the FastMCP tools. Its source
   is **bundled into the CLI package** and the image is **built locally** by `hivemind up` (tagged
   `hivemind:<version>`) — nothing is pulled from a registry.
-- **`cli/`** — the Node/TS host CLI, published as `hivemind`. It never contains team
+- **`cli/`** — the Node/TS host CLI, published as `@crash0v3rrid3/hivemind`. It never contains team
   data; it *provisions the node*: reads `~/.hivemind.conf`, sets up the rclone mount, generates the
   Compose stack and env, wires Claude (CLAUDE.md block, MCP entry, guard hook), and runs
   `up`/`down`/`doctor`.
@@ -69,26 +69,32 @@ The full data model, file format, loop semantics, MCP tool surface, and invarian
 - **macOS** (Apple Silicon or Intel) — Hivemind nodes are developer laptops.
 - **Nix** with flakes enabled (the default `deploy_backend`), **or** **Docker** (`deploy_backend = "docker"`). If `nix` is unavailable the CLI falls back to Docker automatically.
 - **Node.js ≥ 18** to run the CLI via `npx`.
+- **GitHub Packages access** — the CLI is published under the `@crash0v3rrid3` scope on GitHub Packages; a GitHub token with `read:packages` is needed to install it.
 - **Google Drive for Desktop** syncing a shared `hivemind/` folder: readable by the team, with each member's own subfolder writable (see [SPEC.md](./SPEC.md)).
 
 ## Quickstart (via `npx`)
 
-The CLI is published on npm, so drive everything through `npx`. (Or run
-`npm i -g hivemind` once and call `hivemind <cmd>` directly — this avoids npx
-re-resolving the package on every call.)
+The CLI is published to **GitHub Packages** under the `@crash0v3rrid3` scope. Point npm at that
+registry once, then drive everything through `npx`. (Or run `npm i -g @crash0v3rrid3/hivemind` once
+and call `hivemind <cmd>` directly — this avoids npx re-resolving the package on every call.)
 
 ```sh
-# 1. Scaffold your config (~/.hivemind.conf), then fill in the shared Drive folder + your handle
-npx -y hivemind init
-npx -y hivemind config --edit
+# 1. Point the @crash0v3rrid3 scope at GitHub Packages (needs a GitHub token with read:packages),
+#    e.g. in ~/.npmrc:
+#      @crash0v3rrid3:registry=https://npm.pkg.github.com
+#      //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 
-# 2. One-shot: generate the stack, bring it up, verify, and wire Claude
-npx -y hivemind install
+# 2. Scaffold your config (~/.hivemind.conf), then fill in the shared Drive folder + your handle
+npx -y @crash0v3rrid3/hivemind init
+npx -y @crash0v3rrid3/hivemind config --edit
+
+# 3. One-shot: generate the stack, bring it up, verify, and wire Claude
+npx -y @crash0v3rrid3/hivemind install
 
 # First `up` BUILDS the app image locally from bundled source (no registry). The real embedder is
 # fastembed/onnxruntime (no torch), so the image is small and the first build is ~1 min; reruns reuse it.
-npx -y hivemind status
-npx -y hivemind doctor
+npx -y @crash0v3rrid3/hivemind status
+npx -y @crash0v3rrid3/hivemind doctor
 ```
 
 `~/.hivemind.conf` (TOML) is the only file you edit by hand:
@@ -127,12 +133,12 @@ Common lifecycle commands:
 
 | Command | Does |
 |---|---|
-| `npx -y hivemind up` | Regenerate derived files from conf, then start the stack |
-| `npx -y hivemind down` | Stop the stack |
-| `npx -y hivemind uninstall` | Inverse of `install`: stop + unwire Claude (`--purge` also removes local data; never touches the Drive folder) |
-| `npx -y hivemind status` / `logs` | Inspect the running stack |
-| `npx -y hivemind doctor` | Check mount / DB / MCP reachability, ACLs, roster, image tag |
-| `npx -y hivemind admin provision-user <handle> <email>` | Create + share a member's Drive folder |
+| `npx -y @crash0v3rrid3/hivemind up` | Regenerate derived files from conf, then start the stack |
+| `npx -y @crash0v3rrid3/hivemind down` | Stop the stack |
+| `npx -y @crash0v3rrid3/hivemind uninstall` | Inverse of `install`: stop + unwire Claude (`--purge` also removes local data; never touches the Drive folder) |
+| `npx -y @crash0v3rrid3/hivemind status` / `logs` | Inspect the running stack |
+| `npx -y @crash0v3rrid3/hivemind doctor` | Check mount / DB / MCP reachability, ACLs, roster, image tag |
+| `npx -y @crash0v3rrid3/hivemind admin provision-user <handle> <email>` | Create + share a member's Drive folder |
 
 Once `up`, Claude Code sees the `hivemind` MCP server at `http://localhost:<mcp_port>/mcp` and can
 call `memory_add`, `memory_search`, `memory_list_recent`, and the rest of the tool surface.
@@ -180,7 +186,7 @@ folder as the hive, fake embeddings, no Google Drive) and **`docker-compose.prod
 
 ### Node CLI (`cli/`)
 
-- TypeScript (strict), commander, published as `hivemind` (`bin` → `dist/cli.js`).
+- TypeScript (strict), commander, published as `@crash0v3rrid3/hivemind` (`bin` → `dist/cli.js`).
 - Tooling: `eslint` (typescript-eslint), `prettier`, `vitest`, `tsc`.
 
 ```sh
@@ -202,8 +208,8 @@ your real `~/.claude` or `~/.hivemind`.
 ```
 hivemind/
   app/        Python container app (MCP server + export/import loops)
-  cli/        Node/TS host CLI, published as hivemind
-  .github/    CI (make check on PRs) + release (npm) on tag
+  cli/        Node/TS host CLI, published as @crash0v3rrid3/hivemind
+  .github/    CI (make check on PRs) + release (GitHub Packages) on tag
   .claude/    Repo guide + subagents for Claude working in THIS repo
   Makefile    fmt / lint / typecheck / test / check across both packages
   SPEC.md     Implementation spec — the single source of truth
@@ -213,7 +219,7 @@ hivemind/
 ## Releasing
 
 Pushing a tag (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`, which publishes the CLI to
-npm. The package is **self-sufficient** — it bundles the app source and `hivemind up` builds the
+GitHub Packages. The package is **self-sufficient** — it bundles the app source and `hivemind up` builds the
 image locally — so nothing is pulled from a registry at runtime. A stack change ships as a new
 package version, which rebuilds the local image
 on upgrade. Pull requests run `make check`. See the workflow for details.

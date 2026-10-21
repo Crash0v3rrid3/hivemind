@@ -34,14 +34,14 @@ record sits in, never from a field in the file.**
 app/    Python container app (MCP server + loops).  Owns: models, schemas, serialization,
         repository (append-only CRUD), service (add/update/delete/get/list/search/history/
         daily_summary), embeddings, loops, mcp_server. Tests in app/tests/.
-cli/    Node/TS host CLI, published as hivemind. Provisions the node: config,
+cli/    Node/TS host CLI, published as @crash0v3rrid3/hivemind. Provisions the node: config,
         rclone mount, generate .env/rclone.conf/docker-compose.yml, wire Claude (CLAUDE.md
         block, MCP entry, guard hook), up/down/status/doctor. Tests in cli/test/.
         SELF-SUFFICIENT: `npm run build` bundles app/ into cli/app (gitignored, shipped via
         package.json files); setup/up stage it to ~/.hivemind/app and compose builds
         `hivemind:<version>` LOCALLY — no registry pull. `embeddings` (conf, default true)
         toggles INSTALL_EMBEDDINGS (real fastembed/onnx embedder vs fake). Stack version == package version.
-.github/ CI (make check on PRs) + release (npm) on tag.
+.github/ CI (make check on PRs) + release (GitHub Packages) on tag.
 .claude/ This guide + subagents.
 Makefile / README.md / SPEC.md / LICENSE
 ```

@@ -32,7 +32,7 @@ hivemind/
     pyproject.toml             # deps + ruff + mypy(strict) + pytest config; fastembed optional [embeddings] (onnxruntime, no torch)
     Dockerfile                 # ARG INSTALL_EMBEDDINGS: 0=fake embedder (test), 1=real fastembed/onnx (prod)
     README.md                  # short: how to run/test the app
-  cli/                         # Node/TS host CLI, published as hivemind
+  cli/                         # Node/TS host CLI, published as @crash0v3rrid3/hivemind
     src/
       cli.ts                   # commander entry (bin)
       config.ts                # ~/.hivemind.conf (TOML) load/validate/resolve; folder-id extraction
@@ -388,7 +388,7 @@ The **guard hook must never call npx** — install a self-contained `~/.hivemind
 [ "$HIVEMIND_GUARD_DISABLE" = "1" ] && exit 0
 URL="${HIVEMIND_MCP_URL:-http://localhost:7777/mcp}"
 curl -s -m 2 -o /dev/null "$URL" && exit 0
-echo "Hivemind MCP unreachable — run: npx -y hivemind up (first boot ~60-90s)" >&2
+echo "Hivemind MCP unreachable — run: npx -y @crash0v3rrid3/hivemind up (first boot ~60-90s)" >&2
 exit 1
 ```
 Hook JSON merged (not overwritten) into ~/.claude/settings.json:
@@ -403,9 +403,9 @@ are unit-testable without touching the real home directory.
 
 ## 13. Distribution
 
-CLI published as `hivemind` on npm, run via `npx -y hivemind <cmd>`.
+CLI published as `@crash0v3rrid3/hivemind` on GitHub Packages (`publishConfig.registry=https://npm.pkg.github.com`), run via `npx -y @crash0v3rrid3/hivemind <cmd>`.
 `bin` -> `dist/cli.js` (shebang `#!/usr/bin/env node`). Durable state in `~/.hivemind/`.
-Tip: `npm i -g hivemind` installs the `hivemind` binary once and lets you call
+Tip: `npm i -g @crash0v3rrid3/hivemind` installs the `hivemind` binary once and lets you call
 `hivemind <cmd>` directly, avoiding npx re-resolving the package on every invocation.
 
 **Self-sufficient — the package ships everything to run.** The build bundles the Python app source
@@ -414,7 +414,7 @@ includes `app/`), and `hivemind up` builds the image locally from it. The **imag
 to the CLI package version**: any stack change ships as a new package version, which changes the
 `hivemind:<version>` tag and triggers a rebuild on upgrade. No registry pull is needed at runtime.
 
-GitHub Actions on tag: build + publish the CLI to npm (NODE_AUTH_TOKEN = NPM_TOKEN). The app image
+GitHub Actions on tag: build + publish the CLI to GitHub Packages (NODE_AUTH_TOKEN = GITHUB_TOKEN). The app image
 is always built locally by `up`, so no image registry is involved.
 
 ---

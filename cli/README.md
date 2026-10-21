@@ -8,10 +8,10 @@ Drive folder.
 
 ## Install / run
 
-Published on npm; run without a global install:
+Published to GitHub Packages (`@crash0v3rrid3` scope); run without a global install:
 
 ```sh
-npx -y hivemind <command>
+npx -y @crash0v3rrid3/hivemind <command>
 ```
 
 ## Quickstart

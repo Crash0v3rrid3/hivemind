@@ -1,5 +1,5 @@
 {
-  "name": "hivemind",
+  "name": "@crash0v3rrid3/hivemind",
   "version": "0.1.0",
   "description": "Hivemind host CLI — provisions and operates a local, serverless, append-only shared team memory exposed over MCP.",
   "keywords": [
@@ -34,6 +34,9 @@
   ],
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-templates.mjs && node scripts/bundle-app.mjs",
