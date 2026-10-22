@@ -218,7 +218,7 @@
         </div>
         <div class="card">
           <h3>Real semantic search</h3>
-          <p>Every record is embedded locally and indexed in pgvector, so search matches meaning, not just keywords &mdash; the same query surface as a hosted tool.</p>
+          <p>Every record is embedded locally and indexed in a local vector store &mdash; embedded SQLite + sqlite-vec, or Postgres + pgvector &mdash; so search matches meaning, not just keywords, with the same query surface as a hosted tool.</p>
         </div>
         <div class="card">
           <h3>Trustworthy authorship</h3>
@@ -246,7 +246,7 @@
           <rect class="d-card" x="24" y="70" width="250" height="150" rx="12" />
           <text class="d-ink" x="44" y="100" font-size="16" font-weight="600">Your node</text>
           <text class="d-mut" x="44" y="126" font-size="12.5">MCP server</text>
-          <text class="d-mut" x="44" y="146" font-size="12.5">Postgres + pgvector</text>
+          <text class="d-mut" x="44" y="146" font-size="12.5">SQLite / Postgres (vectors)</text>
           <text class="d-mut" x="44" y="166" font-size="12.5">local_events / team_events</text>
           <text class="d-mut" x="44" y="195" font-size="12.5">export + import loops</text>
 
@@ -254,7 +254,7 @@
           <rect class="d-card" x="706" y="70" width="250" height="150" rx="12" />
           <text class="d-ink" x="726" y="100" font-size="16" font-weight="600">Teammate&#39;s node</text>
           <text class="d-mut" x="726" y="126" font-size="12.5">MCP server</text>
-          <text class="d-mut" x="726" y="146" font-size="12.5">Postgres + pgvector</text>
+          <text class="d-mut" x="726" y="146" font-size="12.5">SQLite / Postgres (vectors)</text>
           <text class="d-mut" x="726" y="166" font-size="12.5">team_events / local_events</text>
           <text class="d-mut" x="726" y="195" font-size="12.5">export + import loops</text>
 
@@ -299,7 +299,7 @@
         <li>
           <div>
             <strong>Write, locally.</strong>
-            <p>A call to <span class="mono">memory_add</span> over MCP stores a record in your node&#39;s Postgres, with a 384-dimension embedding computed on the spot.</p>
+            <p>A call to <span class="mono">memory_add</span> over MCP stores a record in your node&#39;s local database &mdash; embedded SQLite or Postgres &mdash; with a 384-dimension embedding computed on the spot.</p>
           </div>
         </li>
         <li>
@@ -389,7 +389,7 @@
         <div class="panel">
           <h3>Nix <span class="tag">default &middot; macOS</span></h3>
           <ul>
-            <li>Postgres and the app run natively, supervised by process-compose &mdash; no Docker.</li>
+            <li>The app runs natively, supervised by process-compose &mdash; no Docker. Persistence is embedded SQLite, or a local Postgres.</li>
             <li>Falls back to devenv when process-compose isn&#39;t available.</li>
             <li>Pairs with Google Drive for Desktop: the folder is already on disk, so no mount daemon.</li>
           </ul>
@@ -397,7 +397,7 @@
         <div class="panel">
           <h3>Docker <span class="tag">portable</span></h3>
           <ul>
-            <li>Docker Compose runs Postgres and the app from a locally-built image &mdash; nothing pulled from a registry.</li>
+            <li>Docker Compose runs the app &mdash; with embedded SQLite or a Postgres container &mdash; from a locally-built image, nothing pulled from a registry.</li>
             <li>Mounts Drive with the rclone FUSE container, or binds a Google Drive for Desktop folder.</li>
             <li>The chosen backend is detected automatically, with Docker as the fallback.</li>
           </ul>
