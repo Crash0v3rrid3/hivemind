@@ -21,6 +21,8 @@ dependencies = [
     "pgvector>=0.3.0",
     "pydantic>=2.6",
     "structlog>=24.1",
+    "aiosqlite>=0.20",
+    "sqlite-vec>=0.1",
 ]
 
 [project.optional-dependencies]
@@ -71,6 +73,7 @@ module = [
     "onnxruntime.*",
     "pgvector.*",
     "mcp.*",
+    "sqlite_vec.*",
 ]
 ignore_missing_imports = true
 

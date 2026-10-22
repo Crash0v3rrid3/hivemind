@@ -22,6 +22,8 @@
         pgvector
         pydantic
         structlog
+        aiosqlite
+        sqlite-vec
       ];
 
       # The app built from ./ (this app/ dir). Embeddings are imported lazily, so

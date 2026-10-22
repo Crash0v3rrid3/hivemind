@@ -1,24 +1,34 @@
-"""Async, append-only persistence over Postgres.
+"""Async, append-only persistence over Postgres+pgvector OR SQLite+sqlite-vec.
 
-This is the ONLY module that talks to the database, keeping every other layer
-DB-free and unit-testable. All writes are inserts (append-only); updates and
-deletes are new rows. The idempotent :func:`init_schema` creates the pgvector
-extension, the tables, and the HNSW indexes.
+This is the ONLY module that talks to the database, keeping every other layer DB-free
+and unit-testable. All writes are inserts (append-only); updates and deletes are new
+rows. The backend is chosen by the engine dialect (see :mod:`hivemind_app.db`): the
+idempotent :func:`init_schema` creates the pgvector extension + HNSW indexes on
+Postgres, or just the tables on SQLite (sqlite-vec is loaded per-connection and search
+is brute-force, which is ample at a team's scale).
 
-Candidate fetches (recent / nearest) deliberately do NOT apply metadata filters
-or hidden-id removal — that logic lives in :mod:`hivemind_app.service` as pure,
-testable functions. The repository's job is the SQL: ordering, nearest-neighbour
-search, over-fetch, CRUD, and hidden-id / history computation.
+Candidate fetches (recent / nearest) deliberately do NOT apply metadata filters or
+hidden-id removal — that logic lives in :mod:`hivemind_app.service`.
 """
 
 from __future__ import annotations
 
+import struct
 import uuid
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, text, update
+from sqlalchemy import (
+    CursorResult,
+    LargeBinary,
+    func,
+    literal,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from .db import Base
@@ -42,18 +52,20 @@ _HNSW_INDEX_SQL = (
 
 
 async def init_schema(engine: AsyncEngine) -> None:
-    """Create the extension, tables, and HNSW indexes idempotently.
+    """Create the tables (and, on Postgres, the vector extension + HNSW indexes).
 
-    Safe on a brand-new database: the ``vector`` extension is created before
-    ``create_all`` emits the vector-column DDL, all in one transaction.
+    Postgres: ``CREATE EXTENSION vector`` before ``create_all`` emits the vector-column
+    DDL (same transaction), then the HNSW indexes. SQLite: just ``create_all`` — the
+    sqlite-vec extension is loaded per-connection and search is brute-force (no index).
     """
     async with engine.begin() as conn:
-        # CREATE EXTENSION first so the vector type exists before create_all emits
-        # the vector(384) column DDL (same transaction — the type is visible).
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await conn.run_sync(Base.metadata.create_all)
-        for stmt in _HNSW_INDEX_SQL:
-            await conn.execute(text(stmt))
+        if conn.dialect.name == "postgresql":
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            await conn.run_sync(Base.metadata.create_all)
+            for stmt in _HNSW_INDEX_SQL:
+                await conn.execute(text(stmt))
+        else:
+            await conn.run_sync(Base.metadata.create_all)
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +104,8 @@ def _record_to_values(record: EventRecord) -> dict[str, object]:
         "jira_project": record.jira_project,
         "jira_ticket": record.jira_ticket,
         "tags": list(record.tags),
-        # Map to the ORM attribute name (the DB column is "metadata", but the
-        # bare key "metadata" collides with SQLAlchemy's reserved MetaData).
+        # Map to the ORM attribute name (DB column is "metadata", which collides with
+        # SQLAlchemy's reserved MetaData, so the Python attr is "event_metadata").
         "event_metadata": dict(record.metadata),
         "supersedes": record.supersedes,
         "deletes": record.deletes,
@@ -104,26 +116,12 @@ def _record_to_values(record: EventRecord) -> dict[str, object]:
 
 
 def _dedupe_by_id(records: list[EventRecord]) -> list[EventRecord]:
-    """Last-wins dedupe by id, so a single multi-row insert never hits the same
-    conflict target twice within one statement."""
+    """Last-wins dedupe by id, so one multi-row insert never hits the same conflict
+    target twice within a single statement."""
     seen: dict[uuid.UUID, EventRecord] = {}
     for record in records:
         seen[record.id] = record
     return list(seen.values())
-
-
-async def _insert_team(session: AsyncSession, records: list[EventRecord]) -> int:
-    """One multi-row INSERT ... ON CONFLICT (id) DO NOTHING into team_events.
-
-    Returns the number of rows actually inserted (conflicts excluded).
-    """
-    stmt = (
-        pg_insert(TeamEvent)
-        .values([_record_to_values(r) for r in records])
-        .on_conflict_do_nothing(index_elements=["id"])
-    )
-    result = await session.execute(stmt)
-    return cast("CursorResult[Any]", result).rowcount or 0
 
 
 class Repository:
@@ -131,6 +129,27 @@ class Repository:
 
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
+        bind = sessionmaker.kw.get("bind")
+        self._is_sqlite = bool(bind is not None and bind.dialect.name == "sqlite")
+
+    # -- dialect-aware insert -------------------------------------------------
+
+    def _insert(self, model: Any) -> Any:
+        """INSERT construct carrying ``on_conflict_do_nothing`` for the active backend."""
+        return sqlite_insert(model) if self._is_sqlite else pg_insert(model)
+
+    async def _insert_team(self, session: AsyncSession, records: list[EventRecord]) -> int:
+        """One multi-row INSERT ... ON CONFLICT (id) DO NOTHING into team_events.
+
+        Returns the number of rows actually inserted (conflicts excluded).
+        """
+        stmt = (
+            self._insert(TeamEvent)
+            .values([_record_to_values(r) for r in records])
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        result = await session.execute(stmt)
+        return cast("CursorResult[Any]", result).rowcount or 0
 
     # -- writes ---------------------------------------------------------------
 
@@ -139,19 +158,18 @@ class Repository:
         async with self._sessionmaker() as session, session.begin():
             values = _record_to_values(record)
             values["exported_at"] = None
-            await session.execute(pg_insert(LocalEvent).values(**values))
+            await session.execute(self._insert(LocalEvent).values(**values))
 
     async def import_records(self, records: list[EventRecord]) -> int:
         """Bulk-insert ingested records into ``team_events`` (ON CONFLICT DO NOTHING).
 
-        One multi-row INSERT (deduped by id) rather than a statement per record.
-        Returns the number of rows actually inserted (new ids).
+        One multi-row INSERT (deduped by id). Returns rows actually inserted.
         """
         unique = _dedupe_by_id(records)
         if not unique:
             return 0
         async with self._sessionmaker() as session, session.begin():
-            return await _insert_team(session, unique)
+            return await self._insert_team(session, unique)
 
     async def is_file_ingested(self, path: str) -> bool:
         async with self._sessionmaker() as session:
@@ -161,7 +179,7 @@ class Repository:
     async def mark_file_ingested(self, path: str) -> None:
         async with self._sessionmaker() as session, session.begin():
             stmt = (
-                pg_insert(IngestedFile)
+                self._insert(IngestedFile)
                 .values(path=path)
                 .on_conflict_do_nothing(index_elements=["path"])
             )
@@ -175,9 +193,9 @@ class Repository:
         """
         unique = _dedupe_by_id(records)
         async with self._sessionmaker() as session, session.begin():
-            inserted = await _insert_team(session, unique) if unique else 0
+            inserted = await self._insert_team(session, unique) if unique else 0
             await session.execute(
-                pg_insert(IngestedFile)
+                self._insert(IngestedFile)
                 .values(path=path)
                 .on_conflict_do_nothing(index_elements=["path"])
             )
@@ -231,11 +249,7 @@ class Repository:
         return hidden
 
     async def recent_candidates(self, pool: int) -> list[EventRecord]:
-        """Return up to ``pool`` most-recent records from both tables (by ts).
-
-        Tombstones are excluded in SQL; hidden-id and metadata filtering are the
-        service's responsibility. The union is globally ordered by ``ts`` desc.
-        """
+        """Return up to ``pool`` most-recent records from both tables (by ts desc)."""
         records: list[EventRecord] = []
         async with self._sessionmaker() as session:
             for model in _EVENT_TABLES:
@@ -258,13 +272,20 @@ class Repository:
     ) -> list[tuple[EventRecord, float]]:
         """Return up to ``pool`` nearest records per table with cosine distance.
 
-        The two tables' candidate pools are concatenated (not re-ranked); the
-        service unions, drops hidden ids, re-sorts by distance, and truncates.
+        Postgres uses pgvector's ``<=>`` (cosine) via ``cosine_distance``; SQLite uses
+        sqlite-vec's ``vec_distance_cosine`` against the float32 BLOB. Either way the two
+        tables' pools are concatenated; the service unions, drops hidden ids, re-sorts.
         """
         hits: list[tuple[EventRecord, float]] = []
+        qblob = struct.pack(f"<{len(query_vec)}f", *query_vec) if self._is_sqlite else None
         async with self._sessionmaker() as session:
             for model in _EVENT_TABLES:
-                distance = model.embedding.cosine_distance(query_vec)
+                if self._is_sqlite:
+                    distance = func.vec_distance_cosine(
+                        model.embedding, literal(qblob, type_=LargeBinary)
+                    )
+                else:
+                    distance = model.embedding.cosine_distance(query_vec)
                 stmt = (
                     select(model, distance.label("distance"))
                     .where(model.event_type != "tombstone")
@@ -272,17 +293,11 @@ class Repository:
                     .limit(pool)
                 )
                 for row in (await session.execute(stmt)).all():
-                    orm_obj = row[0]
-                    dist = float(row[1])
-                    hits.append((_orm_to_record(orm_obj), dist))
+                    hits.append((_orm_to_record(row[0]), float(row[1])))
         return hits
 
     async def history_chain(self, event_id: uuid.UUID) -> list[EventRecord]:
-        """Return the supersede chain for ``event_id``, ordered by created_at.
-
-        Walks backwards to the chain root via ``supersedes`` and forwards via
-        records that supersede members, across both tables.
-        """
+        """Return the supersede chain for ``event_id``, ordered by created_at."""
         async with self._sessionmaker() as session:
             by_id: dict[uuid.UUID, EventRecord] = {}
             supersedes_of: dict[uuid.UUID, uuid.UUID] = {}
@@ -302,7 +317,6 @@ class Repository:
         if event_id not in by_id:
             return []
 
-        # Walk to the chain root.
         root = event_id
         seen: set[uuid.UUID] = set()
         while root in supersedes_of and supersedes_of[root] in by_id:
@@ -311,7 +325,6 @@ class Repository:
             seen.add(root)
             root = supersedes_of[root]
 
-        # Walk forward collecting the chain.
         chain: list[EventRecord] = []
         cur: uuid.UUID | None = root
         visited: set[uuid.UUID] = set()
