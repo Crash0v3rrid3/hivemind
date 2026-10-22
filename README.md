@@ -44,23 +44,25 @@ team's memory in its own local database — embedded **SQLite + sqlite-vec** (ze
 
 ## Architecture
 
-```
-        ┌─────────────────────────── one shared Google Drive folder: hivemind/ ───────────────────────────┐
-        │   hivemind/alice/2026-08-19/<epoch>-<uuid>.ndjson   (alice: rw, everyone else: ro)               │
-        │   hivemind/bob/2026-08-19/<epoch>-<uuid>.ndjson     (bob:   rw, everyone else: ro)               │
-        └───────────────────────────────────────────────────────────────────────────────────────────────┘
-                    ▲   write own folder                         │  read all folders
-                    │   (export loop)                            ▼  (import loop)
-   ┌────────────────┴───────────────────────────────────────────────────────────────┐
-   │  Each developer's node — identical local stack (Nix process-compose, or Docker)    │
-   │                                                                                   │
-   │   drive   ── this dev's hivemind/ folder, via Google Drive for Desktop (or rclone)│
-   │   db      ── local index: SQLite+sqlite-vec, or Postgres+pgvector (off the mount) │
-   │   app     ── FastMCP server (streamable HTTP /mcp) + export loop + import loop     │
-   └───────────────────────────────────────────────────────────────────────────────┘
-                    ▲
-                    │  MCP over HTTP (localhost:<mcp_port>/mcp)
-              Claude Code / any MCP client
+```mermaid
+flowchart TB
+    subgraph DRIVE["☁️ one shared Google Drive folder — hivemind/"]
+        direction LR
+        A["alice/&lt;day&gt;/*.ndjson<br/>alice: rw · everyone else: ro"]
+        B["bob/&lt;day&gt;/*.ndjson<br/>bob: rw · everyone else: ro"]
+    end
+
+    subgraph NODE["💻 each developer's node — identical local stack (Nix process-compose, or Docker)"]
+        APP["app<br/>FastMCP server (streamable HTTP /mcp)<br/>+ export loop + import loop"]
+        DB[("db — local index<br/>SQLite+sqlite-vec or Postgres+pgvector<br/>LOCAL, never on the mount")]
+        APP <--> DB
+    end
+
+    CLIENT["Claude Code / any MCP client"]
+
+    APP -- "export loop: write own folder" --> DRIVE
+    DRIVE -- "import loop: read all folders" --> APP
+    CLIENT -- "MCP over HTTP — localhost:&lt;mcp_port&gt;/mcp" --> APP
 ```
 
 Two deployables live in this monorepo:
