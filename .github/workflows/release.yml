@@ -58,12 +58,51 @@ jobs:
           nix build ./app#up -L
 
   # ---------------------------------------------------------------------------
+  # Postgres integration tests — exercises the DEFAULT persistence backend
+  # (Postgres 16 + pgvector) end to end: schema init, append-only CRUD, search.
+  # These are skipped by `make check`, so without this job the default backend
+  # has zero CI coverage.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Postgres integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: hivemind
+          POSTGRES_PASSWORD: hivemind
+          POSTGRES_DB: hivemind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hivemind -d hivemind"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the app (with dev tooling)
+        run: python -m pip install -e "./app[dev]"
+
+      - name: Run Postgres integration tests
+        env:
+          DATABASE_URL_TEST: postgresql+asyncpg://hivemind:hivemind@localhost:5432/hivemind
+        run: cd app && python -m pytest -m integration -v
+
+  # ---------------------------------------------------------------------------
   # Publish the CLI (hivemind) to GitHub Packages — tag only.
   # ---------------------------------------------------------------------------
   publish-cli:
     name: Publish CLI to GitHub Packages
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: check
+    needs: [check, integration]
     runs-on: ubuntu-latest
     permissions:
       contents: read
