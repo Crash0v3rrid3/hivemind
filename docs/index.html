@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="claude:viewport-fit-sides" content="cover" />
+<title>Hivemind</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+<style>
+  /* Layout: a single reading column on warm slate paper; one wide schematic band.
+     Honey accent for structure, muted teal as the secondary signal. */
+  :root {
+    --bg: #f3f2ee;
+    --surface: #fbfaf7;
+    --surface-2: #eceae3;
+    --ink: #1c1b18;
+    --muted: #5f5c54;
+    --line: #dcd9d0;
+    --accent: #b9770c;
+    --accent-soft: #f0e3c8;
+    --accent-ink: #3a2602;
+    --teal: #0f6f66;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14151a;
+      --surface: #1b1d23;
+      --surface-2: #23262e;
+      --ink: #e9e7e1;
+      --muted: #a7a399;
+      --line: #2f333c;
+      --accent: #e0a63f;
+      --accent-soft: #3a2f16;
+      --accent-ink: #f6e9cf;
+      --teal: #4fc4b5;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14151a;
+    --surface: #1b1d23;
+    --surface-2: #23262e;
+    --ink: #e9e7e1;
+    --muted: #a7a399;
+    --line: #2f333c;
+    --accent: #e0a63f;
+    --accent-soft: #3a2f16;
+    --accent-ink: #f6e9cf;
+    --teal: #4fc4b5;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding-left: max(20px, env(safe-area-inset-left, 0px));
+    padding-right: max(20px, env(safe-area-inset-right, 0px));
+    padding-block: 0;
+  }
+  .wide { max-width: 980px; }
+
+  h1, h2, h3 { font-family: "Fraunces", Georgia, serif; text-wrap: balance; line-height: 1.12; margin: 0; }
+  p { margin: 0; }
+  a { color: var(--teal); }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 11px; height: 12px;
+    background: var(--accent);
+    clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+    display: inline-block;
+    flex: none;
+  }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--line); }
+  .head-inner { display: flex; flex-direction: column; gap: 20px; padding-block: 56px 48px; }
+  .mark { display: flex; align-items: center; gap: 14px; }
+  .hexrow { display: flex; gap: 5px; }
+  .hexrow span {
+    width: 15px; height: 17px; display: inline-block;
+    clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  }
+  .hexrow span:nth-child(1) { background: var(--accent); }
+  .hexrow span:nth-child(2) { background: var(--teal); }
+  .hexrow span:nth-child(3) { background: var(--line); }
+  .wordmark { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 26px; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(34px, 7vw, 52px); font-weight: 600; letter-spacing: -0.02em; }
+  .lede { font-size: clamp(18px, 2.4vw, 21px); color: var(--muted); max-width: 46ch; }
+
+  main { display: flex; flex-direction: column; }
+  section { padding-block: 44px; border-bottom: 1px solid var(--line); }
+  section > .wrap > * + * { margin-top: 18px; }
+  h2 { font-size: clamp(25px, 4vw, 32px); font-weight: 500; }
+  h2 + p { margin-top: 14px; }
+  .measure { max-width: 64ch; }
+  .muted { color: var(--muted); }
+
+  /* Problem cards */
+  .cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .card h3 { font-family: "IBM Plex Sans", sans-serif; font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  .card p { font-size: 15px; color: var(--muted); line-height: 1.55; }
+
+  /* Numbered flow */
+  ol.flow { list-style: none; counter-reset: step; padding: 0; margin: 24px 0 0; display: flex; flex-direction: column; gap: 2px; }
+  ol.flow li { counter-increment: step; display: grid; grid-template-columns: 40px 1fr; gap: 16px; padding: 16px 0; border-top: 1px solid var(--line); }
+  ol.flow li:first-child { border-top: none; }
+  ol.flow li::before {
+    content: counter(step, decimal-leading-zero);
+    font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 500;
+    color: var(--accent-ink); background: var(--accent-soft);
+    border-radius: 8px; width: 40px; height: 40px;
+    display: grid; place-items: center;
+  }
+  ol.flow strong { font-weight: 600; }
+  ol.flow p { font-size: 15px; color: var(--muted); margin-top: 3px; }
+
+  /* Diagram */
+  figure { margin: 28px 0 0; }
+  .diagram { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+  .d-card { fill: var(--surface-2); stroke: var(--line); }
+  .d-drive { fill: var(--accent-soft); stroke: var(--accent); }
+  .d-ink { fill: var(--ink); font-family: "IBM Plex Sans", sans-serif; }
+  .d-mut { fill: var(--muted); font-family: "IBM Plex Mono", monospace; }
+  .d-exp { stroke: var(--teal); fill: none; stroke-width: 2; }
+  .d-imp { stroke: var(--accent); fill: none; stroke-width: 2; stroke-dasharray: 5 4; }
+  .d-expfill { fill: var(--teal); }
+  .d-impfill { fill: var(--accent); }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; font-family: "IBM Plex Mono", monospace; }
+
+  /* Tables */
+  .tablewrap { overflow-x: auto; margin-top: 22px; border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); background: var(--surface); }
+  tbody tr:last-child td { border-bottom: none; }
+  td code, .mono { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--teal); }
+  td .t { color: var(--ink); font-weight: 600; }
+
+  .split { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 22px; }
+  .panel { border: 1px solid var(--line); border-radius: 12px; padding: 20px; background: var(--surface); }
+  .panel h3 { font-family: "IBM Plex Sans", sans-serif; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .tag { font-family: "IBM Plex Mono", monospace; font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); }
+  .panel ul { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 14.5px; line-height: 1.6; }
+  .panel li { margin-top: 4px; }
+
+  footer { padding-block: 32px 48px; }
+  footer p { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+
+  @media (max-width: 640px) {
+    .cards, .split { grid-template-columns: 1fr; }
+    body { font-size: 16px; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    a { transition: color 0.15s ease; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap head-inner">
+    <div class="mark">
+      <span class="hexrow"><span></span><span></span><span></span></span>
+      <span class="wordmark">Hivemind</span>
+    </div>
+    <h1>A team memory that lives on every laptop and syncs through a folder.</h1>
+    <p class="lede">No central server, no shared database to run or pay for. Each person keeps the whole team&#39;s memory locally and shares their own through Google Drive.</p>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">Why it exists</div>
+      <h2>Shared memory, without a server to own</h2>
+      <p class="measure">A shared, append-only, semantically-searchable team memory is a great idea &mdash; but the usual way to build one is a central service backed by one database that somebody has to stand up, secure, and keep running. On plenty of teams that central database is a non-starter, and nobody wants to operate a server just to keep notes.</p>
+      <p class="measure">Hivemind keeps the same idea and removes the center. Every developer runs a small node on their own machine. Records are written locally, exported as plain files into a shared Google Drive folder, and imported by everyone else. The result reads like one shared memory, but there is no shared infrastructure to run &mdash; only a folder the team already has.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">What it solves</div>
+      <h2>The problems it takes off the table</h2>
+      <div class="cards">
+        <div class="card">
+          <h3>No central database</h3>
+          <p>Nothing to provision, secure, back up, or bill. The only shared resource is a Drive folder; the sync medium is immutable files.</p>
+        </div>
+        <div class="card">
+          <h3>Stays inside the rules</h3>
+          <p>Data lives on the team&#39;s own Google Workspace Drive and on local disks. No third-party or dedicated shared DB, so org data policy holds.</p>
+        </div>
+        <div class="card">
+          <h3>Real semantic search</h3>
+          <p>Every record is embedded locally and indexed in pgvector, so search matches meaning, not just keywords &mdash; the same query surface as a hosted tool.</p>
+        </div>
+        <div class="card">
+          <h3>Trustworthy authorship</h3>
+          <p>Who wrote a record is derived from the Drive folder it came from, not from anything in the payload, so entries can&#39;t be forged as someone else.</p>
+        </div>
+        <div class="card">
+          <h3>Append-only history</h3>
+          <p>Records supersede rather than overwrite; edits and deletes are new events. The full trail is preserved and auditable.</p>
+        </div>
+        <div class="card">
+          <h3>Works offline</h3>
+          <p>A node is a complete copy. It keeps answering queries with no network; Drive just carries new files in and out when it reconnects.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap wide">
+      <div class="eyebrow">How it works</div>
+      <h2>One node per person, a folder in the middle</h2>
+      <figure>
+        <svg class="diagram" viewBox="0 0 980 360" role="img" aria-label="Two developer nodes exchange records through a shared Google Drive folder. Each node exports its own records and imports its peers.">
+          <!-- left node -->
+          <rect class="d-card" x="24" y="70" width="250" height="150" rx="12" />
+          <text class="d-ink" x="44" y="100" font-size="16" font-weight="600">Your node</text>
+          <text class="d-mut" x="44" y="126" font-size="12.5">MCP server</text>
+          <text class="d-mut" x="44" y="146" font-size="12.5">Postgres + pgvector</text>
+          <text class="d-mut" x="44" y="166" font-size="12.5">local_events / team_events</text>
+          <text class="d-mut" x="44" y="195" font-size="12.5">export + import loops</text>
+
+          <!-- right node -->
+          <rect class="d-card" x="706" y="70" width="250" height="150" rx="12" />
+          <text class="d-ink" x="726" y="100" font-size="16" font-weight="600">Teammate&#39;s node</text>
+          <text class="d-mut" x="726" y="126" font-size="12.5">MCP server</text>
+          <text class="d-mut" x="726" y="146" font-size="12.5">Postgres + pgvector</text>
+          <text class="d-mut" x="726" y="166" font-size="12.5">team_events / local_events</text>
+          <text class="d-mut" x="726" y="195" font-size="12.5">export + import loops</text>
+
+          <!-- center drive -->
+          <rect class="d-drive" x="396" y="60" width="188" height="170" rx="12" />
+          <text class="d-ink" x="490" y="92" font-size="15" font-weight="600" text-anchor="middle">Shared Drive</text>
+          <text class="d-mut" x="490" y="116" font-size="12" text-anchor="middle">hivemind/</text>
+          <text class="d-mut" x="490" y="150" font-size="11.5" text-anchor="middle">you/  (rw)</text>
+          <text class="d-mut" x="490" y="170" font-size="11.5" text-anchor="middle">teammate/  (ro)</text>
+          <text class="d-mut" x="490" y="196" font-size="11" text-anchor="middle">*.ndjson, by day</text>
+
+          <!-- arrows: your export -> drive -->
+          <path class="d-exp" d="M274 118 L389 112" marker-end="url(#expHead)" />
+          <text class="d-expfill" x="300" y="104" font-size="11.5" font-family="IBM Plex Mono, monospace">export own</text>
+          <!-- drive -> your import -->
+          <path class="d-imp" d="M389 175 L276 182" marker-end="url(#impHead)" />
+          <text class="d-impfill" x="300" y="203" font-size="11.5" font-family="IBM Plex Mono, monospace">import peers</text>
+
+          <!-- teammate export -> drive -->
+          <path class="d-exp" d="M706 118 L591 112" marker-end="url(#expHead)" />
+          <text class="d-expfill" x="612" y="104" font-size="11.5" font-family="IBM Plex Mono, monospace">export own</text>
+          <!-- drive -> teammate import -->
+          <path class="d-imp" d="M591 175 L704 182" marker-end="url(#impHead)" />
+          <text class="d-impfill" x="612" y="203" font-size="11.5" font-family="IBM Plex Mono, monospace">import peers</text>
+
+          <text class="d-mut" x="490" y="300" font-size="12.5" text-anchor="middle">Files are immutable and day-bucketed. Each person writes only their own</text>
+          <text class="d-mut" x="490" y="320" font-size="12.5" text-anchor="middle">subfolder; everyone reads the rest. Authorship comes from the folder path.</text>
+
+          <defs>
+            <marker id="expHead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0 0 L8 4 L0 8 z" class="d-expfill" />
+            </marker>
+            <marker id="impHead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0 0 L8 4 L0 8 z" class="d-impfill" />
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>The sync loop, in one picture.</figcaption>
+      </figure>
+
+      <ol class="flow">
+        <li>
+          <div>
+            <strong>Write, locally.</strong>
+            <p>A call to <span class="mono">memory_add</span> over MCP stores a record in your node&#39;s Postgres, with a 384-dimension embedding computed on the spot.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Export to your folder.</strong>
+            <p>The export loop serializes new local records to immutable NDJSON files in <span class="mono">hivemind/&lt;you&gt;/&lt;day&gt;/</span> &mdash; the one subfolder only you can write.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Drive syncs the files.</strong>
+            <p>Google Drive carries your files out and your teammates&#39; files in. No service talks to another; the folder is the only channel.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Import everyone else.</strong>
+            <p>The import loop reads peers&#39; read-only subfolders, stamps each record with the author taken from the folder path, and ingests it into <span class="mono">team_events</span> &mdash; skipping anything already seen.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Search the whole team.</strong>
+            <p><span class="mono">memory_search</span> runs a vector query across your own and the team&#39;s records at once, returning ranked, de-duplicated results with tombstoned and superseded entries dropped.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">Identity &amp; trust</div>
+      <h2>Authorship you can&#39;t fake</h2>
+      <p class="measure">Drive sharing does the enforcement: your own subfolder is writable by you and read-only to everyone else. Because a record&#39;s author is derived from the folder it was imported from &mdash; never from a field in the record &mdash; no node can publish memory under another person&#39;s name. A node only ever writes as its configured owner, and the import side re-derives identity from the path on the way in.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">Data model</div>
+      <h2>Two tables, append-only</h2>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Table</th><th>Holds</th><th>Written by</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="t">local_events</span></td><td>Records authored on this node. The source of truth for your own memory, and what the export loop reads.</td><td><code>memory_add</code>, <code>memory_update</code>, <code>memory_delete</code></td></tr>
+            <tr><td><span class="t">team_events</span></td><td>Records imported from peers&#39; Drive folders &mdash; the local cache of everyone else&#39;s memory.</td><td>import loop</td></tr>
+            <tr><td><span class="t">ingested_files</span></td><td>Which NDJSON files have already been imported, so re-syncs stay cheap and idempotent.</td><td>import loop</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted" style="font-size:14.5px">Edits and deletes are new events: an update <em>supersedes</em> its predecessor and a delete writes a tombstone. Search folds the history down to the current, visible view; nothing is destroyed. Embeddings are <span class="mono">BAAI/bge-small-en-v1.5</span> (384-dim, via fastembed/ONNX &mdash; no PyTorch), indexed with an HNSW cosine index.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">The interface</div>
+      <h2>What a node exposes over MCP</h2>
+      <p class="measure">A node speaks the Model Context Protocol, so any MCP client &mdash; an assistant, an editor, a script &mdash; gets the same tools:</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Tool</th><th>Does</th></tr></thead>
+          <tbody>
+            <tr><td><code>memory_add</code></td><td>Record a new memory, authored as this node&#39;s owner.</td></tr>
+            <tr><td><code>memory_search</code></td><td>Semantic search across the whole team&#39;s memory.</td></tr>
+            <tr><td><code>memory_list_recent</code></td><td>Most recent records, filterable by author, type, project, date.</td></tr>
+            <tr><td><code>memory_get</code> / <code>memory_history</code></td><td>Fetch one record, or its full supersede chain.</td></tr>
+            <tr><td><code>memory_update</code> / <code>memory_delete</code></td><td>Supersede or tombstone one of your own records.</td></tr>
+            <tr><td><code>memory_daily_summary</code></td><td>Per-author, per-type counts for a day.</td></tr>
+            <tr><td><code>me</code> / <code>author_list</code></td><td>This node&#39;s owner handle, and the configured roster.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">Running a node</div>
+      <h2>Two ways to bring it up</h2>
+      <p class="measure">A single CLI generates and operates the whole stack from one config file. Pick how it runs; the memory behaves identically either way.</p>
+      <div class="split">
+        <div class="panel">
+          <h3>Nix <span class="tag">default &middot; macOS</span></h3>
+          <ul>
+            <li>Postgres and the app run natively, supervised by process-compose &mdash; no Docker.</li>
+            <li>Falls back to devenv when process-compose isn&#39;t available.</li>
+            <li>Pairs with Google Drive for Desktop: the folder is already on disk, so no mount daemon.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Docker <span class="tag">portable</span></h3>
+          <ul>
+            <li>Docker Compose runs Postgres and the app from a locally-built image &mdash; nothing pulled from a registry.</li>
+            <li>Mounts Drive with the rclone FUSE container, or binds a Google Drive for Desktop folder.</li>
+            <li>The chosen backend is detected automatically, with Docker as the fallback.</li>
+          </ul>
+        </div>
+      </div>
+      <p class="muted" style="font-size:14.5px">Either way: <span class="mono">init</span> writes the config, <span class="mono">setup</span> prepares the node, <span class="mono">up</span> starts it, and <span class="mono">doctor</span> checks the mount, database, MCP endpoint, and the read/write boundaries between folders.</p>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p>Hivemind &middot; internal explainer &middot; generated with Claude Code.<br />Serverless, append-only shared team memory over MCP. Source of truth: the project&#39;s SPEC and the app flake.</p>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

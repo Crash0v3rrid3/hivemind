@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Specification (read first)
+    url: https://github.com/Crash0v3rrid3/hivemind/blob/main/SPEC.md
+    about: The single source of truth for behavior and invariants.

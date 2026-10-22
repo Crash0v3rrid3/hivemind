@@ -234,12 +234,20 @@ your real `~/.claude` or `~/.hivemind`.
 hivemind/
   app/        Python container app (MCP server + export/import loops)
   cli/        Node/TS host CLI, published as @crash0v3rrid3/hivemind
-  .github/    CI (make check on PRs) + release (GitHub Packages) on tag
-  .claude/    Repo guide + subagents for Claude working in THIS repo
+  docs/       Explainer page (served via GitHub Pages)
+  examples/   End-to-end walkthrough (two-person hive)
+  .github/    CI + release workflows, issue/PR templates
   Makefile    fmt / lint / typecheck / test / check across both packages
   SPEC.md     Implementation spec — the single source of truth
   LICENSE     MIT
 ```
+
+## Project
+
+- **[Explainer](https://crash0v3rrid3.github.io/hivemind/)** — the one-page "why & how" (also in [`docs/`](./docs/index.html)).
+- **[Example walkthrough](./examples/README.md)** — a two-person hive in five minutes.
+- **[SPEC.md](./SPEC.md)** — the single source of truth for behavior and invariants.
+- **[Contributing](./CONTRIBUTING.md)** · **[Security](./SECURITY.md)** · **[Changelog](./CHANGELOG.md)**
 
 ## Releasing
 
