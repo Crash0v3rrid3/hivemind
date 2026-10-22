@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from hivemind_app.schemas import MemoryAddRequest, SearchFilters
 from hivemind_app.service import (
@@ -278,7 +279,7 @@ async def test_daily_summary_counts_by_author_and_type(  # type: ignore[no-untyp
     await fake_repo.insert_local(make_record(author="alice", event_type="update", ts=day))
     await fake_repo.insert_local(make_record(author="alice", event_type="update", ts=day))
     await fake_repo.import_records([make_record(author="bob", event_type="blocker", ts=day)])
-    summary = await svc.daily_summary(day="2026-08-19")
+    summary: Any = await svc.daily_summary(day="2026-08-19")
     assert summary["day"] == "2026-08-19"
     assert summary["total"] == 3
     assert summary["authors"]["alice"]["update"] == 2
@@ -291,7 +292,7 @@ async def test_daily_summary_filters_by_day(  # type: ignore[no-untyped-def]
     svc = _service(fake_repo, fake_embedder, identity, clock)
     await fake_repo.insert_local(make_record(ts=datetime(2026, 8, 19, 10, tzinfo=UTC)))
     await fake_repo.insert_local(make_record(ts=datetime(2026, 8, 20, 10, tzinfo=UTC)))
-    summary = await svc.daily_summary(day="2026-08-19")
+    summary: Any = await svc.daily_summary(day="2026-08-19")
     assert summary["total"] == 1
 
 
@@ -302,7 +303,7 @@ async def test_daily_summary_filters_by_author(  # type: ignore[no-untyped-def]
     day = datetime(2026, 8, 19, 10, tzinfo=UTC)
     await fake_repo.insert_local(make_record(author="alice", ts=day))
     await fake_repo.import_records([make_record(author="bob", ts=day)])
-    summary = await svc.daily_summary(day="2026-08-19", author="bob")
+    summary: Any = await svc.daily_summary(day="2026-08-19", author="bob")
     assert summary["total"] == 1
     assert set(summary["authors"].keys()) == {"bob"}
 
@@ -326,12 +327,14 @@ async def test_get_returns_record_or_none(  # type: ignore[no-untyped-def]
     svc = _service(fake_repo, fake_embedder, identity, clock)
     rec = make_record()
     await fake_repo.insert_local(rec)
-    assert (await svc.get(rec.id)).id == rec.id
+    got = await svc.get(rec.id)
+    assert got is not None
+    assert got.id == rec.id
     assert await svc.get(uuid.uuid4()) is None
 
 
 def _add_req(**overrides: object) -> MemoryAddRequest:
-    base: dict[str, object] = {"title": "t", "body": "b", "jira_project": "BETEL"}
+    base: dict[str, Any] = {"title": "t", "body": "b", "jira_project": "BETEL"}
     base.update(overrides)
     return MemoryAddRequest(**base)
 

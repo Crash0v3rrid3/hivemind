@@ -7,6 +7,7 @@ no database is required.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 
@@ -24,7 +25,7 @@ def _service(fake_repo, fake_embedder, identity, clock) -> MemoryService:  # typ
 
 
 def _add_req(**overrides: object) -> MemoryAddRequest:
-    base: dict[str, object] = {"title": "t", "body": "b", "jira_project": "BETEL"}
+    base: dict[str, Any] = {"title": "t", "body": "b", "jira_project": "BETEL"}
     base.update(overrides)
     return MemoryAddRequest(**base)
 

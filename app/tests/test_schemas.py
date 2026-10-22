@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -21,8 +22,8 @@ from hivemind_app.schemas import (
 )
 
 
-def _valid_add(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = {
+def _valid_add(**overrides: object) -> dict[str, Any]:
+    base: dict[str, Any] = {
         "title": "t",
         "body": "b",
         "jira_project": "BETEL",

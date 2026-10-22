@@ -31,6 +31,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   role must be re-initialized (`hivemind down` + remove the volume, then `up`);
   SQLite nodes and the NDJSON files on the mount are unaffected.
 
+### Fixed
+- `make typecheck` now runs mypy against `app/pyproject.toml` (via `--config-file`)
+  so it applies the intended `--strict` config and the third-party import-ignore
+  overrides; previously, invoked from the repo root, mypy silently fell back to its
+  default config. Pinned mypy to `<2` and resolved the type errors this surfaced in
+  the test suite, so `make check` is deterministic and green across mypy versions.
+
 ## [0.1.0]
 
 ### Added

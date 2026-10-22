@@ -221,11 +221,13 @@ async def test_import_uses_one_bulk_ingested_query(  # type: ignore[no-untyped-d
 
     async def counting_list() -> set[str]:
         calls["list"] += 1
-        return await orig_list()
+        files: set[str] = await orig_list()
+        return files
 
     async def counting_is(path: str) -> bool:
         calls["per_file"] += 1
-        return await orig_is(path)
+        ingested: bool = await orig_is(path)
+        return ingested
 
     fake_repo.list_ingested_files = counting_list
     fake_repo.is_file_ingested = counting_is

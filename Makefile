@@ -79,7 +79,7 @@ app-lint: app-deps
 	$(PY) -m ruff check $(APP_DIR)
 
 app-typecheck: app-deps
-	$(PY) -m mypy $(APP_DIR)
+	$(PY) -m mypy $(APP_DIR) --config-file $(APP_DIR)/pyproject.toml
 
 # Unit layer only: integration tests are marked `integration` and are excluded here.
 app-test: app-deps
