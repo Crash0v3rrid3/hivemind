@@ -175,6 +175,7 @@ friction, ai_session, tombstone` (tombstone is internal, produced only by delete
 
 ```json
 {
+  "schema_version": 1,
   "id": "uuid", "author": "alice", "event_type": "decision", "status": "info",
   "title": "…", "body": "…", "jira_project": "BETEL", "jira_ticket": "BETEL-42",
   "tags": ["a","b"], "metadata": {}, "supersedes": null, "deletes": null,
@@ -185,6 +186,12 @@ friction, ai_session, tombstone` (tombstone is internal, produced only by delete
 
 `embedding` is carried so importers never re-embed. The file's `author` is informational — the
 authoritative author is the owning folder handle, which the importer stamps.
+
+**Format version.** `schema_version` (currently `1`) declares the on-disk format. The format is
+**frozen within a major version**: changes are additive only (new optional keys), so a record
+written by any v1.x node is readable by every other v1.x node. Readers **ignore unknown keys**
+(forward-compatible) and treat a missing `schema_version` as `1`. A breaking format change requires
+a new major and a bump of `schema_version`.
 
 ---
 
@@ -329,7 +336,7 @@ Drive OAuth token lives in `~/.hivemind/rclone.conf`; the `gdrive_desktop` backe
 
 **App env vars** (generated into `~/.hivemind/.env`): `OWNER_HANDLE`, `ROSTER` (comma-separated),
 `HIVEMIND_PATH` (=/mnt/hivemind in-container), `DATABASE_URL`
-(`postgresql+asyncpg://teamtrail:teamtrail@postgres:5432/hivemind`), `EMBEDDING_MODEL`
+(`postgresql+asyncpg://hivemind:hivemind@postgres:5432/hivemind`), `EMBEDDING_MODEL`
 (BAAI/bge-small-en-v1.5), `EMBEDDING_DIM` (384), `EXPORT_INTERVAL_SEC`, `IMPORT_INTERVAL_SEC`,
 `MCP_HOST` (0.0.0.0), `MCP_PORT`.
 

@@ -6,7 +6,7 @@
 #
 #   docker-compose -f docker-compose.test.yml up --build      # full app round-trip
 #   docker-compose -f docker-compose.test.yml up -d postgres  # DB only, for pytest:
-#       DATABASE_URL_TEST=postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind \
+#       DATABASE_URL_TEST=postgresql+asyncpg://hivemind:hivemind@localhost:5433/hivemind \
 #           make -C app test-integration   # (or: pytest -m integration)
 #   docker-compose -f docker-compose.test.yml down -v
 #
@@ -17,8 +17,8 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: teamtrail
-      POSTGRES_PASSWORD: teamtrail
+      POSTGRES_USER: hivemind
+      POSTGRES_PASSWORD: hivemind
       POSTGRES_DB: hivemind
     ports:
       # exposed for host-run pytest integration (DATABASE_URL_TEST). Override the
@@ -27,7 +27,7 @@ services:
     tmpfs:
       - /var/lib/postgresql/data # in-memory: fast + disposable for tests
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U teamtrail -d hivemind"]
+      test: ["CMD-SHELL", "pg_isready -U hivemind -d hivemind"]
       interval: 3s
       timeout: 3s
       retries: 30
@@ -42,7 +42,7 @@ services:
       OWNER_HANDLE: ${OWNER_HANDLE:-localdev}
       ROSTER: ${ROSTER:-localdev}
       HIVEMIND_PATH: /mnt/hivemind
-      DATABASE_URL: postgresql+asyncpg://teamtrail:teamtrail@postgres:5432/hivemind
+      DATABASE_URL: postgresql+asyncpg://hivemind:hivemind@postgres:5432/hivemind
       EMBEDDING_MODEL: fake # deterministic FakeEmbedder — no torch / no downloads
       EMBEDDING_DIM: "384"
       EXPORT_INTERVAL_SEC: "5"

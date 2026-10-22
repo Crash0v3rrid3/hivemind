@@ -5,7 +5,7 @@ unset or Postgres is unreachable (see ``conftest.pg_engine``). Bring up a local
 pgvector with ``docker compose -f docker-compose.test.yml up -d`` and point the
 tests at it:
 
-    DATABASE_URL_TEST=postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind_test \\
+    DATABASE_URL_TEST=postgresql+asyncpg://hivemind:hivemind@localhost:5433/hivemind_test \\
         pytest -m integration
 
 Exercises: idempotent schema init (+ HNSW indexes), repository CRUD, append-only

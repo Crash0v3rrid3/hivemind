@@ -54,13 +54,13 @@ services:
     image: pgvector/pgvector:pg16
     container_name: hivemind-postgres
     environment:
-      POSTGRES_USER: teamtrail
-      POSTGRES_PASSWORD: teamtrail
+      POSTGRES_USER: hivemind
+      POSTGRES_PASSWORD: hivemind
       POSTGRES_DB: hivemind
     volumes:
       - hivemind-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U teamtrail -d hivemind"]
+      test: ["CMD-SHELL", "pg_isready -U hivemind -d hivemind"]
       interval: 5s
       timeout: 5s
       retries: 20

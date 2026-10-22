@@ -145,7 +145,7 @@ class Identity:
 # Settings.
 # ---------------------------------------------------------------------------
 
-DEFAULT_DATABASE_URL = "postgresql+asyncpg://teamtrail:teamtrail@postgres:5432/hivemind"
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://hivemind:hivemind@postgres:5432/hivemind"
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_EMBEDDING_DIM = 384
 DEFAULT_EXPORT_INTERVAL_SEC = 60

@@ -18,8 +18,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+# On-disk NDJSON format version. The file format is FROZEN within a major
+# version: changes are additive only (new optional keys), so a record written
+# by any v1.x node is readable by every other v1.x node. Readers ignore unknown
+# keys (forward-compatible), and a record with no ``schema_version`` is treated
+# as v1. Bump this only for a breaking format change, which is a new major.
+SCHEMA_VERSION = 1
+
 # Exact ordered key set for each NDJSON line (matches SPEC §5).
 LINE_KEYS: tuple[str, ...] = (
+    "schema_version",
     "id",
     "author",
     "event_type",
@@ -103,6 +111,7 @@ def day_bucket(ts: datetime) -> str:
 def record_to_dict(record: EventRecord) -> dict[str, Any]:
     """Convert an :class:`EventRecord` to a JSON-ready dict with all LINE_KEYS."""
     return {
+        "schema_version": SCHEMA_VERSION,
         "id": str(record.id),
         "author": record.author,
         "event_type": record.event_type,
@@ -123,6 +132,9 @@ def record_to_dict(record: EventRecord) -> dict[str, Any]:
 
 def dict_to_record(obj: dict[str, Any]) -> EventRecord:
     """Build an :class:`EventRecord` from a parsed NDJSON object.
+
+    Unknown keys are ignored, so records from a newer (but same-major) writer
+    read cleanly. ``schema_version`` is advisory: a missing value means v1.
 
     Raises ``KeyError``/``ValueError`` if the object is malformed.
     """

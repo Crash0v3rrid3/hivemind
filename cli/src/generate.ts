@@ -23,7 +23,7 @@ import {
 export const CONTAINER_HIVEMIND_PATH = '/mnt/hivemind';
 /** Fixed local Postgres DSN (data volume is LOCAL, never on the mount). */
 export const DATABASE_URL =
-  'postgresql+asyncpg://teamtrail:teamtrail@postgres:5432/hivemind';
+  'postgresql+asyncpg://hivemind:hivemind@postgres:5432/hivemind';
 /** Embedded SQLite DSN for the sqlite persistence backend (db on a LOCAL docker volume). */
 export const SQLITE_DATABASE_URL = 'sqlite+aiosqlite:////data/hivemind.db';
 /** The real (production) embedder, baked into the image when embeddings=true. */
@@ -82,13 +82,13 @@ function postgresServiceBlock(): string {
     image: pgvector/pgvector:pg16
     container_name: hivemind-postgres
     environment:
-      POSTGRES_USER: teamtrail
-      POSTGRES_PASSWORD: teamtrail
+      POSTGRES_USER: hivemind
+      POSTGRES_PASSWORD: hivemind
       POSTGRES_DB: hivemind
     volumes:
       - hivemind-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U teamtrail -d hivemind"]
+      test: ["CMD-SHELL", "pg_isready -U hivemind -d hivemind"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -210,13 +210,13 @@ services:
     image: pgvector/pgvector:pg16
     container_name: hivemind-postgres
     environment:
-      POSTGRES_USER: teamtrail
-      POSTGRES_PASSWORD: teamtrail
+      POSTGRES_USER: hivemind
+      POSTGRES_PASSWORD: hivemind
       POSTGRES_DB: hivemind
     volumes:
       - hivemind-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U teamtrail -d hivemind"]
+      test: ["CMD-SHELL", "pg_isready -U hivemind -d hivemind"]
       interval: 5s
       timeout: 5s
       retries: 20

@@ -38,7 +38,7 @@ The image is normally launched by the CLI via Docker Compose. Standalone:
 ```bash
 export OWNER_HANDLE=alice
 export ROSTER=alice,bob,cara
-export DATABASE_URL='postgresql+asyncpg://teamtrail:teamtrail@localhost:5432/hivemind'
+export DATABASE_URL='postgresql+asyncpg://hivemind:hivemind@localhost:5432/hivemind'
 export HIVEMIND_PATH=/mnt/hivemind
 python -m hivemind_app
 ```
@@ -57,7 +57,7 @@ pytest
 # Integration layer — needs pgvector Postgres (auto-skips when unavailable).
 # The test stack lives at the repo root:
 docker compose -f ../docker-compose.test.yml up -d postgres
-DATABASE_URL_TEST='postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind' \
+DATABASE_URL_TEST='postgresql+asyncpg://hivemind:hivemind@localhost:5433/hivemind' \
     pytest -m integration
 docker compose -f ../docker-compose.test.yml down -v
 ```

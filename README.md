@@ -201,7 +201,7 @@ pytest -m "not integration"          # unit layer (uses the deterministic FakeEm
 
 # Integration tests against a throwaway pgvector instance (test stack, DB only):
 docker compose -f docker-compose.test.yml up -d postgres
-DATABASE_URL_TEST=postgresql+asyncpg://teamtrail:teamtrail@localhost:5433/hivemind pytest -m integration
+DATABASE_URL_TEST=postgresql+asyncpg://hivemind:hivemind@localhost:5433/hivemind pytest -m integration
 ```
 
 Two Compose files are maintained: **`docker-compose.test.yml`** (local — pgvector + app, a local

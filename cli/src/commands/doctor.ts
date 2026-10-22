@@ -55,7 +55,7 @@ function checkDb(): CheckResult {
     'postgres',
     'pg_isready',
     '-U',
-    'teamtrail',
+    'hivemind',
     '-d',
     'hivemind',
   ]);

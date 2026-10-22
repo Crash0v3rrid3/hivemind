@@ -41,8 +41,14 @@ jobs:
   # surface: the app package + the process-compose `up` lifecycle app build.
   # ---------------------------------------------------------------------------
   nix-build:
-    name: Nix flake build (macOS)
-    runs-on: macos-latest
+    name: Nix flake build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest = Apple Silicon (aarch64-darwin); macos-13 = Intel
+        # (x86_64-darwin). Both systems the flake declares are built.
+        os: [macos-latest, macos-13]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
