@@ -19,7 +19,7 @@ import {
   type ResolvedConfig,
 } from '../config.js';
 import { runComposeCapture } from '../docker.js';
-import { effectiveBackend, NIX_PG_PORT, tcpOpen } from '../nix.js';
+import { effectiveBackend, NIX_PG_PORT, nixStateDir, tcpOpen } from '../nix.js';
 import { hivemindAppDir } from '../paths.js';
 import { mcpUrlForPort, probeMcp } from '../guard.js';
 
@@ -77,6 +77,17 @@ async function checkDbNix(): Promise<CheckResult> {
     detail: ok
       ? `listening on 127.0.0.1:${NIX_PG_PORT}`
       : `no listener on 127.0.0.1:${NIX_PG_PORT}`,
+  };
+}
+
+function checkSqliteDb(): CheckResult {
+  const db = path.join(nixStateDir(), 'hivemind.db');
+  const ok = existsSync(db);
+  return {
+    name: 'sqlite db present',
+    ok,
+    critical: true,
+    detail: ok ? `present at ${db}` : `missing ${db} — run \`hivemind up\``,
   };
 }
 
@@ -209,7 +220,7 @@ export async function runDoctor(): Promise<number> {
   results.push(checkMount(cfg));
   if (backend === 'nix') {
     results.push(checkNixStaged());
-    results.push(await checkDbNix());
+    results.push(cfg.persistence === 'sqlite' ? checkSqliteDb() : await checkDbNix());
   } else {
     results.push(checkDb());
   }

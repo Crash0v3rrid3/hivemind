@@ -35,6 +35,7 @@ const CFG: ResolvedConfig = {
   importIntervalSec: 45,
   imageTag: '2.3.4',
   embeddings: true,
+  persistence: 'postgres',
 };
 
 const DESKTOP_CFG: ResolvedConfig = {
@@ -118,6 +119,29 @@ describe('renderRcloneConf', () => {
 // ---------------------------------------------------------------------------
 // renderDockerCompose
 // ---------------------------------------------------------------------------
+const SQLITE_CFG: ResolvedConfig = { ...CFG, persistence: 'sqlite' };
+const SQLITE_DESKTOP_CFG: ResolvedConfig = { ...DESKTOP_CFG, persistence: 'sqlite' };
+
+describe('renderDockerCompose (sqlite)', () => {
+  it('rclone+sqlite: no postgres service, local db volume, sqlite DSN in env', () => {
+    const c = renderDockerCompose(SQLITE_CFG);
+    expect(c).not.toContain('pgvector/pgvector');
+    expect(c).not.toContain('hivemind-postgres');
+    expect(c).toContain('hivemind-dbdata:/data');
+    expect(c).toContain('hivemind-gdrive');
+    expect(renderEnvFile(SQLITE_CFG)).toContain(
+      'DATABASE_URL=sqlite+aiosqlite:////data/hivemind.db',
+    );
+  });
+  it('gdrive_desktop+sqlite: app-only, no postgres/gdrive service, binds the drive folder', () => {
+    const c = renderDockerCompose(SQLITE_DESKTOP_CFG);
+    expect(c).not.toContain('pgvector/pgvector');
+    expect(c).not.toContain('hivemind-gdrive');
+    expect(c).toContain('hivemind-dbdata:/data');
+    expect(c).toContain(SQLITE_DESKTOP_CFG.gdriveDesktopPath as string);
+  });
+});
+
 describe('renderDockerCompose', () => {
   const compose = renderDockerCompose(CFG);
 

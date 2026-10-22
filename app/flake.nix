@@ -81,6 +81,22 @@ processes:
       failure_threshold: 60
 '';
 
+      # App-only process-compose config for the sqlite backend (no postgres/db_init).
+      mkComposeFileSqlite = pkgs: pkgs.writeText "hivemind-process-compose-sqlite.yaml" ''
+version: "0.5"
+processes:
+  app:
+    command: "exec $APP_BIN"
+    availability:
+      restart: on_failure
+      backoff_seconds: 2
+    readiness_probe:
+      exec:
+        command: "curl -sf http://127.0.0.1:$MCP_PORT/healthz"
+      period_seconds: 2
+      failure_threshold: 60
+'';
+
       mkRuntime = pkgs:
         let
           pg = pkgs.postgresql.withPackages (p: [ p.pgvector ]);
@@ -107,6 +123,7 @@ processes:
           '';
           binPath = pkgs.lib.makeBinPath [ pg pkgs.process-compose pkgs.devenv pkgs.coreutils curl ];
           cfg = mkComposeFile pkgs;
+          cfgSqlite = mkComposeFileSqlite pkgs;
           appFake = mkApp pkgs { withEmbeddings = false; };
           appReal = mkApp pkgs { withEmbeddings = true; };
 
@@ -152,12 +169,35 @@ inputs:
             cp ${devenvYaml} $out/devenv.yaml
           '';
 
+          devenvNixSqlite = pkgs.writeText "devenv.nix" ''
+{ ... }:
+{
+  dotenv.enable = true;
+  processes.app = {
+    exec = "exec $APP_BIN";
+    process-compose = {
+      availability.restart = "on_failure";
+      availability.backoff_seconds = 2;
+      readiness_probe.exec.command = "${curl}/bin/curl -sf http://127.0.0.1:$MCP_PORT/healthz";
+      readiness_probe.period_seconds = 2;
+      readiness_probe.failure_threshold = 60;
+    };
+  };
+}
+'';
+          devenvProjectSqlite = pkgs.runCommand "hivemind-devenv-project-sqlite" { } ''
+            mkdir -p $out
+            cp ${devenvNixSqlite} $out/devenv.nix
+            cp ${devenvYaml} $out/devenv.yaml
+          '';
+
           commonHead = ''
             set -euo pipefail
             export PATH="${binPath}:$PATH"
             STATE_DIR="''${HIVEMIND_NIX_STATE:-$HOME/.local/state/hivemind-nix}"
             PC_SOCKET="''${HIVEMIND_PC_SOCKET:-$STATE_DIR/pc.sock}"
             DEVENV_DIR="$STATE_DIR/devenv"
+            PERSISTENCE="''${HIVEMIND_PERSISTENCE:-postgres}"
             resolve_supervisor() {
               local s="''${HIVEMIND_SUPERVISOR:-auto}"
               if [ "$s" = "auto" ]; then
@@ -184,7 +224,15 @@ inputs:
             export OWNER_HANDLE="$OWNER"
             export ROSTER="''${ROSTER:-$OWNER}"
             export HIVEMIND_PATH="$HIVE_DIR"
-            export DATABASE_URL="postgresql+asyncpg://$PGUSER_NAME@127.0.0.1:$PGPORT/hivemind"
+            if [ "$PERSISTENCE" = "sqlite" ]; then
+              export DATABASE_URL="sqlite+aiosqlite:///$STATE_DIR/hivemind.db"
+              CFG="${cfgSqlite}"
+              DEVENV_SRC="${devenvProjectSqlite}"
+            else
+              export DATABASE_URL="postgresql+asyncpg://$PGUSER_NAME@127.0.0.1:$PGPORT/hivemind"
+              CFG="${cfg}"
+              DEVENV_SRC="${devenvProject}"
+            fi
             export EMBEDDING_MODEL="''${EMBEDDING_MODEL:-fake}"
             export EMBEDDING_DIM="384"
             export MCP_HOST="127.0.0.1"
@@ -218,11 +266,11 @@ inputs:
             mkdir -p "$PGDATA" "$SOCK" "$HIVE_DIR/$OWNER" "$FASTEMBED_CACHE_PATH"
             SUP=$(resolve_supervisor)
             printf '%s' "$SUP" > "$STATE_DIR/supervisor"
-            echo "hivemind-up: state=$STATE_DIR pg=127.0.0.1:$PGPORT mcp=127.0.0.1:$MCP_PORT owner=$OWNER embedder=$EMBEDDING_MODEL supervisor=$SUP"
+            echo "hivemind-up: state=$STATE_DIR persistence=$PERSISTENCE pg=127.0.0.1:$PGPORT mcp=127.0.0.1:$MCP_PORT owner=$OWNER embedder=$EMBEDDING_MODEL supervisor=$SUP"
             if [ "$SUP" = "devenv" ]; then
               mkdir -p "$DEVENV_DIR"
-              cp -f ${devenvProject}/devenv.nix "$DEVENV_DIR/devenv.nix"
-              cp -f ${devenvProject}/devenv.yaml "$DEVENV_DIR/devenv.yaml"
+              cp -f "$DEVENV_SRC"/devenv.nix "$DEVENV_DIR/devenv.nix"
+              cp -f "$DEVENV_SRC"/devenv.yaml "$DEVENV_DIR/devenv.yaml"
               chmod u+w "$DEVENV_DIR/devenv.nix" "$DEVENV_DIR/devenv.yaml"
               {
                 echo "PGDATA=$PGDATA"
@@ -246,9 +294,9 @@ inputs:
               if [ "$DETACH" = 1 ]; then exec devenv up -d; else exec devenv up; fi
             else
               if [ "$DETACH" = 1 ]; then
-                exec process-compose -t=false -U -u "$PC_SOCKET" -f ${cfg} up -D
+                exec process-compose -t=false -U -u "$PC_SOCKET" -f "$CFG" up -D
               else
-                exec process-compose -t=false -U -u "$PC_SOCKET" -f ${cfg} up
+                exec process-compose -t=false -U -u "$PC_SOCKET" -f "$CFG" up
               fi
             fi
           '';

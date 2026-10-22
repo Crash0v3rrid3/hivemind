@@ -21,6 +21,15 @@ username = "alice"
 deploy_backend = "nix"
 
 # ---------------------------------------------------------------------------
+# Persistence engine. Optional; defaults to "postgres".
+#   "postgres"  Postgres + pgvector (a DB server: initdb + a postgres process).
+#   "sqlite"    Embedded SQLite + sqlite-vec — NO database server. `up` runs just
+#               the app; the db is a local file (nix: under ~/.hivemind/nix-state,
+#               docker: a local volume), never on the Drive mount. Lightest option.
+# ---------------------------------------------------------------------------
+# persistence = "postgres"
+
+# ---------------------------------------------------------------------------
 # Mount backend — how the shared hive/ folder is reached. Optional; defaults to
 # "rclone". The "nix" deploy backend requires "gdrive_desktop".
 #

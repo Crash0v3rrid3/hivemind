@@ -30,6 +30,7 @@ export interface RawConf {
   gdrive_desktop_path?: string;
   embeddings?: boolean;
   deploy_backend?: string;
+  persistence?: string;
 }
 
 /** How the hive folder is mounted into the app container. */
@@ -39,6 +40,10 @@ export type MountBackend = (typeof MOUNT_BACKENDS)[number];
 /** Which runtime operates the stack: nix (process-compose, no Docker) or docker. */
 export const DEPLOY_BACKENDS = ['nix', 'docker'] as const;
 export type DeployBackend = (typeof DEPLOY_BACKENDS)[number];
+
+/** Persistence engine: postgres+pgvector (a DB server) or embedded sqlite+sqlite-vec. */
+export const PERSISTENCE_BACKENDS = ['postgres', 'sqlite'] as const;
+export type Persistence = (typeof PERSISTENCE_BACKENDS)[number];
 
 /** Fully-resolved, validated config used by every command. */
 export interface ResolvedConfig {
@@ -75,6 +80,8 @@ export interface ResolvedConfig {
    * at runtime (resolved by effectiveBackend in nix.ts, not here).
    */
   deployBackend: DeployBackend;
+  /** Persistence: 'postgres' (default, pgvector server) or 'sqlite' (embedded sqlite-vec, no DB server). */
+  persistence: Persistence;
 }
 
 /** Built-in defaults (lowest precedence). */
@@ -146,6 +153,15 @@ export function resolveMountBackend(value: string | undefined): MountBackend {
   if ((MOUNT_BACKENDS as readonly string[]).includes(v)) return v as MountBackend;
   throw new ConfigError(
     `invalid mount_backend "${v}" (must be one of ${MOUNT_BACKENDS.join(', ')})`,
+  );
+}
+
+/** Resolve + validate the persistence engine (defaults to 'postgres'). */
+export function resolvePersistence(value: string | undefined): Persistence {
+  const v = value ?? 'postgres';
+  if ((PERSISTENCE_BACKENDS as readonly string[]).includes(v)) return v as Persistence;
+  throw new ConfigError(
+    `invalid persistence "${v}" (must be one of ${PERSISTENCE_BACKENDS.join(', ')})`,
   );
 }
 
@@ -303,6 +319,9 @@ export function resolveConfig(
   // deploy backend (default nix; runtime falls back to docker when nix is absent)
   const deployBackend = resolveDeployBackend(env.HIVEMIND_DEPLOY_BACKEND ?? raw.deploy_backend);
 
+  // persistence engine (default postgres)
+  const persistence = resolvePersistence(env.HIVEMIND_PERSISTENCE ?? raw.persistence);
+
   return {
     mountBackend,
     gdriveFolderUrl,
@@ -317,6 +336,7 @@ export function resolveConfig(
     imageTag,
     embeddings,
     deployBackend,
+    persistence,
   };
 }
 

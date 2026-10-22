@@ -215,6 +215,7 @@ describe('resolveConfig', () => {
       imageTag: '9.9.9',
       embeddings: true,
       deployBackend: 'nix',
+      persistence: 'postgres',
     });
   });
 

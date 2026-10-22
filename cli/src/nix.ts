@@ -82,6 +82,7 @@ export function nixUpEnv(cfg: ResolvedConfig): NodeJS.ProcessEnv {
     ...nixStateEnv(),
     HIVEMIND_HIVE: hostHivePath(cfg),
     HIVEMIND_PGPORT: String(NIX_PG_PORT),
+    HIVEMIND_PERSISTENCE: cfg.persistence,
     OWNER_HANDLE: cfg.ownerHandle,
     ROSTER: cfg.roster.join(','),
     MCP_PORT: String(cfg.mcpPort),

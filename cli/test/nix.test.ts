@@ -30,6 +30,7 @@ function cfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
     imageTag: '0.1.0',
     embeddings: true,
     deployBackend: 'nix',
+    persistence: 'postgres',
     ...overrides,
   };
 }
