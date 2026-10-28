@@ -7,15 +7,16 @@ idempotent :func:`init_schema` creates the pgvector extension + HNSW indexes on
 Postgres, or just the tables on SQLite (sqlite-vec is loaded per-connection and search
 is brute-force, which is ample at a team's scale).
 
-Candidate fetches (recent / nearest) deliberately do NOT apply metadata filters or
-hidden-id removal — that logic lives in :mod:`hivemind_app.service`.
+Candidate fetches apply ownership-aware visibility and metadata filters before limits.
 """
 
 from __future__ import annotations
 
+import json
 import struct
 import uuid
-from datetime import datetime
+from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import (
@@ -23,6 +24,7 @@ from sqlalchemy import (
     LargeBinary,
     func,
     literal,
+    or_,
     select,
     text,
     update,
@@ -30,13 +32,16 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
+from .config import DEFAULT_EMBEDDING_DIM
 from .db import Base
-from .models import IngestedFile, LocalEvent, TeamEvent
-from .serialization import EventRecord
+from .models import ConflictedEvent, IngestedFile, LocalEvent, StateBinding, TeamEvent
+from .schemas import SearchFilters
+from .serialization import EventRecord, record_to_dict, validate_embedding
 
 # Both event tables share an identical column set.
-_EVENT_TABLES = (LocalEvent, TeamEvent)
+_EVENT_TABLES: tuple[Any, ...] = (LocalEvent, TeamEvent)
 
 
 # ---------------------------------------------------------------------------
@@ -115,13 +120,17 @@ def _record_to_values(record: EventRecord) -> dict[str, object]:
     }
 
 
-def _dedupe_by_id(records: list[EventRecord]) -> list[EventRecord]:
-    """Last-wins dedupe by id, so one multi-row insert never hits the same conflict
-    target twice within a single statement."""
-    seen: dict[uuid.UUID, EventRecord] = {}
-    for record in records:
-        seen[record.id] = record
-    return list(seen.values())
+def _fingerprint(record: EventRecord) -> str:
+    data = record_to_dict(record)
+    # Stored vectors are float32 on both backends. Compare their wire precision.
+    data["embedding"] = list(
+        struct.unpack(
+            f"<{len(record.embedding)}f",
+            struct.pack(f"<{len(record.embedding)}f", *record.embedding),
+        )
+    )
+    data.pop("embedding_model", None)
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
 class Repository:
@@ -129,6 +138,8 @@ class Repository:
 
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
+        self.embedding_model: str | None = None
+        self.owner_handle: str | None = None
         bind = sessionmaker.kw.get("bind")
         self._is_sqlite = bool(bind is not None and bind.dialect.name == "sqlite")
 
@@ -138,34 +149,106 @@ class Repository:
         """INSERT construct carrying ``on_conflict_do_nothing`` for the active backend."""
         return sqlite_insert(model) if self._is_sqlite else pg_insert(model)
 
-    async def _insert_team(self, session: AsyncSession, records: list[EventRecord]) -> int:
-        """One multi-row INSERT ... ON CONFLICT (id) DO NOTHING into team_events.
+    async def bind_identity(self, owner: str, hive_id: str, embedding_model: str) -> None:
+        """Bind an empty DB, or validate its existing immutable identity.
 
-        Returns the number of rows actually inserted (conflicts excluded).
+        Legacy nonempty databases require an explicit migration rather than guessing
+        their hive or embedding provenance.
         """
-        stmt = (
-            self._insert(TeamEvent)
-            .values([_record_to_values(r) for r in records])
-            .on_conflict_do_nothing(index_elements=["id"])
-        )
-        result = await session.execute(stmt)
-        return cast("CursorResult[Any]", result).rowcount or 0
+        expected = {"owner": owner, "hive_id": hive_id, "embedding_model": embedding_model}
+        async with self._sessionmaker() as session, session.begin():
+            existing = dict(
+                (await session.execute(select(StateBinding.key, StateBinding.value))).all()
+            )
+            if not existing:
+                for table in _EVENT_TABLES:
+                    if await session.scalar(select(func.count()).select_from(table)):
+                        raise ValueError(
+                            "unbound nonempty database requires explicit identity/model migration"
+                        )
+                for key, value in expected.items():
+                    await session.execute(
+                        self._insert(StateBinding)
+                        .values(key=key, value=value)
+                        .on_conflict_do_nothing(index_elements=["key"])
+                    )
+                existing = dict(
+                    (await session.execute(select(StateBinding.key, StateBinding.value))).all()
+                )
+            if existing != expected:
+                raise ValueError(
+                    "database owner, hive or embedding model differs; "
+                    "use a fresh database or migrate explicitly"
+                )
+        self.embedding_model = embedding_model
+        self.owner_handle = owner
+
+    def _record(self, row: LocalEvent | TeamEvent) -> EventRecord:
+        return replace(_orm_to_record(row), embedding_model=self.embedding_model)
+
+    async def _insert_team(
+        self, session: AsyncSession, records: list[EventRecord], *, own: bool = False
+    ) -> int:
+        """Bounded inserts and persistent, arrival-order-independent UUID quarantine."""
+        inserted = 0
+        model = LocalEvent if own else TeamEvent
+        for start in range(0, len(records), 400):
+            batch = records[start : start + 400]
+            ids = [r.id for r in batch]
+            known: dict[uuid.UUID, EventRecord] = {}
+            row: Any
+            for table in _EVENT_TABLES:
+                for row in (
+                    await session.execute(select(table).where(table.id.in_(ids)))
+                ).scalars():
+                    known[row.id] = self._record(row)
+            pending: dict[uuid.UUID, EventRecord] = {}
+            for rec in batch:
+                validate_embedding(rec.embedding, DEFAULT_EMBEDDING_DIM)
+                if self.embedding_model is not None:
+                    wire_model = rec.embedding_model
+                    if wire_model != self.embedding_model:
+                        raise ValueError("imported embedding model does not match database")
+                old = known.get(rec.id) or pending.get(rec.id)
+                if old is not None:
+                    if _fingerprint(old) != _fingerprint(rec):
+                        await session.execute(
+                            self._insert(ConflictedEvent)
+                            .values(id=rec.id)
+                            .on_conflict_do_nothing(index_elements=["id"])
+                        )
+                    continue
+                pending[rec.id] = rec
+            if pending:
+                values = [_record_to_values(r) for r in pending.values()]
+                if own:
+                    for value in values:
+                        value["exported_at"] = datetime.now(UTC)
+                result = await session.execute(
+                    self._insert(model).values(values).on_conflict_do_nothing(index_elements=["id"])
+                )
+                inserted += cast("CursorResult[Any]", result).rowcount or 0
+        return inserted
 
     # -- writes ---------------------------------------------------------------
 
     async def insert_local(self, record: EventRecord) -> None:
         """Append a record the owner authored into ``local_events``."""
         async with self._sessionmaker() as session, session.begin():
+            if self.owner_handle is not None and record.author != self.owner_handle:
+                raise ValueError("local author differs from bound owner")
+            if self.embedding_model is not None and record.embedding_model != self.embedding_model:
+                raise ValueError("local embedding model differs from bound model")
             values = _record_to_values(record)
             values["exported_at"] = None
             await session.execute(self._insert(LocalEvent).values(**values))
 
     async def import_records(self, records: list[EventRecord]) -> int:
-        """Bulk-insert ingested records into ``team_events`` (ON CONFLICT DO NOTHING).
+        """Import bounded batches, quarantining inconsistent duplicate UUIDs.
 
-        One multi-row INSERT (deduped by id). Returns rows actually inserted.
+        Returns rows newly inserted; identical retries are idempotent.
         """
-        unique = _dedupe_by_id(records)
+        unique = records
         if not unique:
             return 0
         async with self._sessionmaker() as session, session.begin():
@@ -185,15 +268,15 @@ class Repository:
             )
             await session.execute(stmt)
 
-    async def import_file(self, records: list[EventRecord], path: str) -> int:
+    async def import_file(self, records: list[EventRecord], path: str, *, own: bool = False) -> int:
         """Insert a file's records AND mark the file ingested in ONE transaction.
 
-        Batched multi-row insert (deduped by id); the file is always recorded as
-        ingested — even when it yields zero new rows — so it is never re-read.
+        The caller validates complete publication before invoking this transaction.
+        Owner recovery inserts published records into local_events as exported.
         """
-        unique = _dedupe_by_id(records)
+        unique = records
         async with self._sessionmaker() as session, session.begin():
-            inserted = await self._insert_team(session, unique) if unique else 0
+            inserted = await self._insert_team(session, unique, own=own) if unique else 0
             await session.execute(
                 self._insert(IngestedFile)
                 .values(path=path)
@@ -208,130 +291,198 @@ class Repository:
             return set(rows)
 
     async def list_unexported_local(self) -> list[EventRecord]:
-        """Return unexported local records ordered by ``created_at`` ascending."""
+        """Return at most 1000 unexported, unquarantined local records."""
         async with self._sessionmaker() as session:
             stmt = (
                 select(LocalEvent)
-                .where(LocalEvent.exported_at.is_(None))
+                .where(
+                    LocalEvent.exported_at.is_(None),
+                    LocalEvent.id.not_in(select(ConflictedEvent.id)),
+                )
                 .order_by(LocalEvent.created_at.asc())
+                .limit(1000)
             )
             rows = (await session.execute(stmt)).scalars().all()
-            return [_orm_to_record(r) for r in rows]
+            return [self._record(r) for r in rows]
 
     async def mark_exported(self, ids: list[uuid.UUID], now: datetime) -> None:
         if not ids:
             return
         async with self._sessionmaker() as session, session.begin():
-            stmt = update(LocalEvent).where(LocalEvent.id.in_(ids)).values(exported_at=now)
-            await session.execute(stmt)
+            for start in range(0, len(ids), 400):
+                stmt = (
+                    update(LocalEvent)
+                    .where(LocalEvent.id.in_(ids[start : start + 400]))
+                    .values(exported_at=now)
+                )
+                await session.execute(stmt)
 
     # -- reads ----------------------------------------------------------------
 
-    async def get_by_id(self, event_id: uuid.UUID) -> EventRecord | None:
-        """Return a record by id from either table (local takes precedence)."""
+    async def _all_records(self) -> dict[uuid.UUID, EventRecord]:
         async with self._sessionmaker() as session:
-            row = await session.get(LocalEvent, event_id)
-            if row is not None:
-                return _orm_to_record(row)
-            trow = await session.get(TeamEvent, event_id)
-            return _orm_to_record(trow) if trow is not None else None
+            conflicts = set((await session.execute(select(ConflictedEvent.id))).scalars())
+            records: dict[uuid.UUID, EventRecord] = {}
+            row: Any
+            for model in reversed(_EVENT_TABLES):
+                for row in (await session.execute(select(model))).scalars():
+                    if row.id not in conflicts:
+                        records[row.id] = self._record(row)
+            return records
+
+    async def get_by_id(self, event_id: uuid.UUID) -> EventRecord | None:
+        async with self._sessionmaker() as session:
+            if await session.get(ConflictedEvent, event_id) is not None:
+                return None
+            for table in _EVENT_TABLES:
+                row = await session.get(table, event_id)
+                if row is not None:
+                    return self._record(row)
+        return None
+
+    def _visible_conditions(self, model: Any) -> list[Any]:
+        conditions = [model.event_type != "tombstone", model.id.not_in(select(ConflictedEvent.id))]
+        if model is TeamEvent:
+            conditions.append(model.id.not_in(select(LocalEvent.id)))
+        for table in _EVENT_TABLES:
+            ref = aliased(table)
+            authorized = (
+                select(ref.id)
+                .where(
+                    or_(ref.supersedes == model.id, ref.deletes == model.id),
+                    ref.author == model.author,
+                    ref.id != model.id,
+                    ref.id.not_in(select(ConflictedEvent.id)),
+                )
+                .correlate(model)
+                .exists()
+            )
+            conditions.append(~authorized)
+        return conditions
+
+    def _filter_conditions(self, model: Any, filters: SearchFilters | None) -> list[Any]:
+        if filters is None:
+            return []
+        conditions: list[Any] = []
+        for field in ("author", "event_type", "status", "jira_project", "jira_ticket"):
+            value = getattr(filters, field)
+            if value is not None:
+                conditions.append(getattr(model, field) == value)
+        if filters.date_from is not None:
+            conditions.append(model.ts >= filters.date_from)
+        if filters.date_to is not None:
+            conditions.append(model.ts <= filters.date_to)
+        for tag in filters.tags or []:
+            if self._is_sqlite:
+                tags = func.json_each(model.tags).table_valued("value")
+                conditions.append(
+                    select(tags.c.value).where(tags.c.value == tag).correlate(model).exists()
+                )
+            else:
+                conditions.append(model.tags.any(tag))
+        return conditions
 
     async def hidden_ids(self) -> set[uuid.UUID]:
-        """Union of all non-null ``supersedes`` and ``deletes`` across tables."""
         hidden: set[uuid.UUID] = set()
         async with self._sessionmaker() as session:
-            for model in _EVENT_TABLES:
-                for col in (model.supersedes, model.deletes):
-                    stmt = select(col).where(col.is_not(None))
-                    for value in (await session.execute(stmt)).scalars().all():
-                        if value is not None:
-                            hidden.add(value)
+            for table in _EVENT_TABLES:
+                for target_table in _EVENT_TABLES:
+                    ref = aliased(table)
+                    target = aliased(target_table)
+                    stmt = (
+                        select(target.id)
+                        .join(ref, or_(ref.supersedes == target.id, ref.deletes == target.id))
+                        .where(
+                            ref.author == target.author,
+                            ref.id != target.id,
+                            ref.id.not_in(select(ConflictedEvent.id)),
+                            target.id.not_in(select(ConflictedEvent.id)),
+                        )
+                    )
+                    hidden.update((await session.execute(stmt)).scalars())
         return hidden
 
-    async def recent_candidates(self, pool: int) -> list[EventRecord]:
-        """Return up to ``pool`` most-recent records from both tables (by ts desc)."""
+    async def recent_candidates(
+        self,
+        pool: int | None,
+        *,
+        filters: SearchFilters | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[EventRecord]:
         records: list[EventRecord] = []
+        row: Any
         async with self._sessionmaker() as session:
             for model in _EVENT_TABLES:
-                per = (
+                conditions = self._visible_conditions(model) + self._filter_conditions(
+                    model, filters
+                )
+                if since is not None:
+                    conditions.append(model.ts >= since)
+                if until is not None:
+                    conditions.append(model.ts < until)
+                stmt = (
                     select(model)
-                    .where(model.event_type != "tombstone")
-                    .order_by(model.ts.desc())
+                    .where(*conditions)
+                    .order_by(model.ts.desc(), model.id.desc())
                     .limit(pool)
                 )
-                rows = cast(
-                    "list[LocalEvent | TeamEvent]",
-                    (await session.execute(per)).scalars().all(),
-                )
-                records.extend(_orm_to_record(r) for r in rows)
-        records.sort(key=lambda r: r.ts, reverse=True)
-        return records[:pool]
+                for row in (await session.execute(stmt)).scalars():
+                    records.append(self._record(row))
+        records.sort(key=lambda r: (r.ts, str(r.id)), reverse=True)
+        return records if pool is None else records[:pool]
 
     async def nearest_candidates(
-        self, query_vec: list[float], pool: int
+        self, query_vec: list[float], pool: int, *, filters: SearchFilters | None = None
     ) -> list[tuple[EventRecord, float]]:
-        """Return up to ``pool`` nearest records per table with cosine distance.
+        """Exact database cosine ranking, with visibility and filters before LIMIT.
 
-        Postgres uses pgvector's ``<=>`` (cosine) via ``cosine_distance``; SQLite uses
-        sqlite-vec's ``vec_distance_cosine`` against the float32 BLOB. Either way the two
-        tables' pools are concatenated; the service unions, drops hidden ids, re-sorts.
+        Adding zero to PostgreSQL's distance order intentionally prevents approximate
+        HNSW plans from silently returning fewer than the requested eligible pool.
         """
+        validate_embedding(query_vec, DEFAULT_EMBEDDING_DIM)
         hits: list[tuple[EventRecord, float]] = []
-        qblob = struct.pack(f"<{len(query_vec)}f", *query_vec) if self._is_sqlite else None
         async with self._sessionmaker() as session:
             for model in _EVENT_TABLES:
                 if self._is_sqlite:
-                    distance = func.vec_distance_cosine(
-                        model.embedding, literal(qblob, type_=LargeBinary)
+                    blob = struct.pack(f"<{len(query_vec)}f", *query_vec)
+                    distance = func.coalesce(
+                        func.vec_distance_cosine(model.embedding, literal(blob, type_=LargeBinary)),
+                        1.0,
                     )
                 else:
                     distance = model.embedding.cosine_distance(query_vec)
                 stmt = (
                     select(model, distance.label("distance"))
-                    .where(model.event_type != "tombstone")
-                    .order_by(distance.asc())
+                    .where(
+                        *self._visible_conditions(model), *self._filter_conditions(model, filters)
+                    )
+                    .order_by((distance + 0).asc(), model.id.asc())
                     .limit(pool)
                 )
                 for row in (await session.execute(stmt)).all():
-                    hits.append((_orm_to_record(row[0]), float(row[1])))
-        return hits
+                    hits.append(
+                        (self._record(row[0]), float(row[1]) if row[1] is not None else 1.0)
+                    )
+        hits.sort(key=lambda h: (h[1], str(h[0].id)))
+        return hits[:pool]
 
     async def history_chain(self, event_id: uuid.UUID) -> list[EventRecord]:
-        """Return the supersede chain for ``event_id``, ordered by created_at."""
-        async with self._sessionmaker() as session:
-            by_id: dict[uuid.UUID, EventRecord] = {}
-            supersedes_of: dict[uuid.UUID, uuid.UUID] = {}
-            superseded_by: dict[uuid.UUID, uuid.UUID] = {}
-            for model in _EVENT_TABLES:
-                rows = cast(
-                    "list[LocalEvent | TeamEvent]",
-                    (await session.execute(select(model))).scalars().all(),
-                )
-                for r in rows:
-                    rec = _orm_to_record(r)
-                    by_id[rec.id] = rec
-                    if rec.supersedes is not None:
-                        supersedes_of[rec.id] = rec.supersedes
-                        superseded_by[rec.supersedes] = rec.id
-
-        if event_id not in by_id:
+        """Connected supersession component, preserving every authorized branch."""
+        records = await self._all_records()
+        if event_id not in records:
             return []
-
-        root = event_id
+        edges: dict[uuid.UUID, set[uuid.UUID]] = {}
+        for rec in records.values():
+            target = rec.supersedes
+            if target in records and records[target].author == rec.author:
+                edges.setdefault(rec.id, set()).add(target)
+                edges.setdefault(target, set()).add(rec.id)
+        pending = [event_id]
         seen: set[uuid.UUID] = set()
-        while root in supersedes_of and supersedes_of[root] in by_id:
-            if root in seen:
-                break
-            seen.add(root)
-            root = supersedes_of[root]
-
-        chain: list[EventRecord] = []
-        cur: uuid.UUID | None = root
-        visited: set[uuid.UUID] = set()
-        while cur is not None and cur in by_id and cur not in visited:
-            visited.add(cur)
-            chain.append(by_id[cur])
-            cur = superseded_by.get(cur)
-
-        chain.sort(key=lambda r: r.created_at)
-        return chain
+        while pending:
+            current = pending.pop()
+            if current not in seen:
+                seen.add(current)
+                pending.extend(edges.get(current, set()) - seen)
+        return sorted((records[i] for i in seen), key=lambda r: (r.created_at, str(r.id)))

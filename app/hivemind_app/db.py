@@ -51,18 +51,20 @@ def _register_sqlite_vec(engine: AsyncEngine) -> None:
     """Load the sqlite-vec extension on each new SQLite connection.
 
     The connect event fires with SQLAlchemy's async-adapter DBAPI connection; the real
-    ``sqlite3.Connection`` is reached via ``driver_connection._conn`` and
-    enable_load_extension / sqlite_vec.load run synchronously on it.
+    extension is loaded via the aiosqlite driver on its own worker thread.
     """
     import sqlite_vec
 
     @event.listens_for(engine.sync_engine, "connect")
     def _load(dbapi_connection: Any, _record: Any) -> None:
-        driver = getattr(dbapi_connection, "driver_connection", dbapi_connection)
-        raw = getattr(driver, "_conn", driver)
-        raw.enable_load_extension(True)
-        sqlite_vec.load(raw)
-        raw.enable_load_extension(False)
+        async def load(driver: Any) -> None:
+            await driver.enable_load_extension(True)
+            try:
+                await driver.load_extension(sqlite_vec.loadable_path())
+            finally:
+                await driver.enable_load_extension(False)
+
+        dbapi_connection.run_async(load)
 
 
 def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

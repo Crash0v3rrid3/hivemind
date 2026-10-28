@@ -3,13 +3,22 @@
  * effective backend: Nix (process-compose, default on macOS) or Docker Compose.
  * `up` first regenerates/stages so the running stack reflects ~/.hivemind.conf.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { Command } from 'commander';
 import { ConfigError, loadResolvedConfig, type ResolvedConfig } from '../config.js';
 import { composeDown, composeLogs, composeStatus, composeUp, prePullPostgres } from '../docker.js';
-import { effectiveBackend, nixDown, nixLogs, nixStatus, nixUp, waitHealthy } from '../nix.js';
+import {
+  effectiveBackend,
+  nixDown,
+  nixLogs,
+  nixSocketPath,
+  nixStatus,
+  nixUp,
+  waitHealthy,
+} from '../nix.js';
 import { stageAppSource, writeGeneratedFiles } from '../generate.js';
-import { hivemindConfPath } from '../paths.js';
+import { hivemindConfPath, hivemindDir } from '../paths.js';
 
 function requireConfigured(): boolean {
   if (!existsSync(hivemindConfPath())) {
@@ -19,10 +28,33 @@ function requireConfigured(): boolean {
   return true;
 }
 
+function backendRecordPath(): string {
+  return path.join(hivemindDir(), 'running-backend');
+}
+
+function recordBackend(backend: 'nix' | 'docker'): void {
+  mkdirSync(hivemindDir(), { recursive: true });
+  writeFileSync(backendRecordPath(), backend, { mode: 0o600 });
+}
+
+/** Prefer running state over edited configuration or changed executable availability. */
+export function recordedBackend(): 'nix' | 'docker' | undefined {
+  if (existsSync(nixSocketPath())) return 'nix';
+  if (!existsSync(backendRecordPath())) return undefined;
+  const value = readFileSync(backendRecordPath(), 'utf8').trim();
+  if (value !== 'nix' && value !== 'docker')
+    throw new Error('Invalid running-backend record; refusing to guess.');
+  return value;
+}
+
+export function clearBackendRecord(): void {
+  rmSync(backendRecordPath(), { force: true });
+}
+
 /** Resolve the effective backend for down/status/logs; default to docker if unreadable. */
 function resolveBackend(): 'nix' | 'docker' {
   try {
-    return effectiveBackend(loadResolvedConfig()).backend;
+    return recordedBackend() ?? loadResolvedConfig().deployBackend;
   } catch {
     return 'docker';
   }
@@ -44,11 +76,14 @@ async function runUpNix(cfg: ResolvedConfig): Promise<number> {
     return 1;
   }
   console.log('Starting Hivemind stack via Nix (first run fetches the closure)...');
+  recordBackend('nix');
   const code = nixUp(cfg);
   if (code !== 0) return code;
   const ok = await waitHealthy(cfg.mcpPort);
   if (!ok) {
-    console.error('stack started but /healthz did not become ready in time — check `hivemind logs`.');
+    console.error(
+      'stack started but /healthz did not become ready in time — check `hivemind logs`.',
+    );
     return 1;
   }
   console.log(`Hivemind is up — MCP at http://127.0.0.1:${cfg.mcpPort}/mcp`);
@@ -65,6 +100,7 @@ function runUpDocker(cfg: ResolvedConfig): number {
     return 1;
   }
   console.log('Starting Hivemind stack (first run builds the image locally, ~1 min)...');
+  recordBackend('docker');
   prePullPostgres();
   return composeUp();
 }

@@ -186,15 +186,14 @@ export function resolveEmbeddings(
     throw new ConfigError(`invalid HIVEMIND_EMBEDDINGS "${envVal}" (use true or false)`);
   }
   if (typeof rawVal === 'boolean') return rawVal;
+  if (rawVal !== undefined) throw new ConfigError('embeddings must be a boolean');
   return true; // default: real embedder (self-sufficient)
 }
 
 /** Validate a member handle against `^[a-z0-9][a-z0-9._-]*$`. Returns it on success. */
 export function validateHandle(handle: string): string {
   if (typeof handle !== 'string' || !HANDLE_RE.test(handle)) {
-    throw new ConfigError(
-      `invalid handle "${handle}" (must match ${HANDLE_RE.source})`,
-    );
+    throw new ConfigError(`invalid handle "${handle}" (must match ${HANDLE_RE.source})`);
   }
   return handle;
 }
@@ -220,7 +219,38 @@ function validateInterval(value: number | string, key: string): number {
 /** Parse TOML config text into a {@link RawConf}. Pure. */
 export function parseConf(tomlText: string): RawConf {
   const parsed = parseToml(tomlText) as Record<string, unknown>;
+  validateRawConf(parsed);
   return parsed as RawConf;
+}
+
+/** Reject malformed TOML values before any coercion or defaults hide them. */
+function validateRawConf(raw: Record<string, unknown>): void {
+  const types: Record<string, string> = {
+    gdrive_folder_url: 'string',
+    username: 'string',
+    mcp_port: 'number',
+    mount_path: 'string',
+    export_interval_sec: 'number',
+    import_interval_sec: 'number',
+    image_tag: 'string',
+    mount_backend: 'string',
+    gdrive_desktop_path: 'string',
+    embeddings: 'boolean',
+    deploy_backend: 'string',
+    persistence: 'string',
+  };
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === 'roster') {
+      if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+        throw new ConfigError('roster must be an array of handles');
+      }
+      value.forEach((v: string) => validateHandle(v));
+    } else if (!(key in types) || typeof value !== types[key]) {
+      throw new ConfigError(
+        `invalid ${key}: expected ${types[key] ?? 'a known configuration key'}`,
+      );
+    }
+  }
 }
 
 /** Split a comma-separated roster env value into trimmed, non-empty handles. */
@@ -241,6 +271,7 @@ export function resolveConfig(
   env: NodeJS.ProcessEnv = {},
   defaults: ConfigDefaults = defaultConfig(),
 ): ResolvedConfig {
+  validateRawConf(raw as Record<string, unknown>);
   // mount backend (defaults to rclone)
   const mountBackend = resolveMountBackend(env.HIVEMIND_MOUNT_BACKEND ?? raw.mount_backend);
 
@@ -292,13 +323,17 @@ export function resolveConfig(
   if (env.HIVEMIND_ROSTER !== undefined) {
     roster = splitRoster(env.HIVEMIND_ROSTER);
   } else if (Array.isArray(raw.roster)) {
-    roster = raw.roster.map((s) => String(s).trim()).filter((s) => s.length > 0);
+    roster = raw.roster.map(validateHandle);
   } else {
     roster = [];
   }
 
+  roster.forEach(validateHandle);
+
   // mount_path
   const mountPath = env.HIVEMIND_MOUNT_PATH ?? raw.mount_path ?? defaults.mountPath;
+
+  if (!path.isAbsolute(mountPath)) throw new ConfigError('mount_path must be an absolute path');
 
   // intervals
   const exportIntervalSec = validateInterval(

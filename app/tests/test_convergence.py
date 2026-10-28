@@ -67,6 +67,7 @@ async def make_node(  # type: ignore[no-untyped-def]
     engines: list[AsyncEngine] = []
 
     async def _make(name: str) -> Repository:
+        (tmp_path / "hive" / name).mkdir(parents=True, exist_ok=True)
         engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / f'{name}.db'}")
         await init_schema(engine)
         engines.append(engine)
@@ -104,13 +105,14 @@ async def test_authorship_comes_from_folder_not_file(  # type: ignore[no-untyped
     make_node, tmp_path
 ) -> None:
     hive = tmp_path / "hive"
-    alice = await make_node("alice")
+    await make_node("alice")
     bob = await make_node("bob")
 
     # alice's node emits a record whose author FIELD is forged.
     forged = _rec(author="mallory", title="forged")
-    await alice.insert_local(forged)
-    await export_once(alice, "alice", hive)
+    from hivemind_app.serialization import serialize_records
+
+    (hive / "alice" / "forged.ndjson").write_text(serialize_records([forged]))
 
     await import_once(bob, Identity(owner_handle="bob", roster=_ROSTER), hive)
     got = await bob.get_by_id(forged.id)

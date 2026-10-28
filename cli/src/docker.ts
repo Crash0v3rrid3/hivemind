@@ -167,6 +167,8 @@ export function prePullPostgres(): boolean {
 
 /** `<compose> up -d` (detached). */
 export function composeUp(): number {
+  const build = runCompose(['build', 'app']);
+  if (build !== 0) return build;
   return runCompose(['up', '-d']);
 }
 

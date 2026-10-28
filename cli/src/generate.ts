@@ -8,8 +8,9 @@
  * unit-tested without any filesystem access. `writeGeneratedFiles` is the only
  * side-effecting function; it just persists what the pure renderers produce.
  */
-import { cpSync, chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import type { ResolvedConfig } from './config.js';
+import { cpSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { hostHivePath, type ResolvedConfig } from './config.js';
 import {
   bundledAppDir,
   composePath,
@@ -34,6 +35,22 @@ export const EMBEDDING_DIM = 384;
 /** Local image tag; the app is built from bundled source, never pulled from a registry. */
 export const APP_IMAGE_NAME = 'hivemind';
 
+/** Bind local data to the configured hive, including remote changes at one mount. */
+export function hiveIdentity(cfg: ResolvedConfig): string {
+  const identity = cfg.folderId ? `drive:${cfg.folderId}` : `path:${hostHivePath(cfg)}`;
+  return createHash('sha256').update(identity).digest('hex');
+}
+
+/** Quote a literal YAML string and suppress Compose's dollar interpolation. */
+export function composeScalar(value: string): string {
+  return JSON.stringify(value.replace(/\$/g, () => '$$'));
+}
+
+/** Build options are part of the local image identity. */
+export function appImageTag(cfg: ResolvedConfig): string {
+  return `${APP_IMAGE_NAME}:${cfg.imageTag}-${cfg.embeddings ? 'real' : 'fake'}`;
+}
+
 /**
  * Render ~/.hivemind/.env — the container environment (SPEC §10).
  * Keys exactly: OWNER_HANDLE, ROSTER, HIVEMIND_PATH, DATABASE_URL, EMBEDDING_MODEL,
@@ -46,6 +63,7 @@ export function renderEnvFile(cfg: ResolvedConfig): string {
     `OWNER_HANDLE=${cfg.ownerHandle}`,
     `ROSTER=${cfg.roster.join(',')}`,
     `HIVEMIND_PATH=${CONTAINER_HIVEMIND_PATH}`,
+    `HIVEMIND_ID=${hiveIdentity(cfg)}`,
     `DATABASE_URL=${cfg.persistence === 'sqlite' ? SQLITE_DATABASE_URL : DATABASE_URL}`,
     `EMBEDDING_MODEL=${cfg.embeddings ? EMBEDDING_MODEL : FAKE_EMBEDDING_MODEL}`,
     `EMBEDDING_DIM=${EMBEDDING_DIM}`,
@@ -76,6 +94,25 @@ export function renderRcloneConf(cfg: ResolvedConfig, token = ''): string {
   return lines.join('\n') + '\n';
 }
 
+/** Update only managed remote fields, keeping OAuth and custom options intact. */
+export function reconcileRcloneConf(cfg: ResolvedConfig, existing: string, token?: string): string {
+  const section = /^\[hivemind\][ \t]*\r?$/m.exec(existing);
+  if (!section) return existing + (existing && !existing.endsWith('\n') ? '\n' : '') + renderRcloneConf(cfg, token);
+  const start = section.index + section[0].length;
+  const following = existing.slice(start);
+  const next = /^\[/m.exec(following);
+  const end = next ? start + next.index : existing.length;
+  let body = existing.slice(start, end);
+  const fields: Record<string, string> = { type: 'drive', root_folder_id: cfg.folderId! };
+  if (token !== undefined) fields.token = token;
+  for (const [key, value] of Object.entries(fields)) {
+    const line = new RegExp(`^${key}[ \\t]*=.*$`, 'gm');
+    if (line.test(body)) body = body.replace(line, () => `${key} = ${value}`);
+    else body = body.replace(/\s*$/, '') + `\n${key} = ${value}\n`;
+  }
+  return existing.slice(0, start) + body + existing.slice(end);
+}
+
 /** Render the pgvector Postgres service block (shared by both backends). */
 function postgresServiceBlock(): string {
   return `  postgres:
@@ -98,9 +135,9 @@ function postgresServiceBlock(): string {
 
 /**
  * The app service's image directive: build LOCALLY from the bundled ./app source
- * (staged into ~/.hivemind/app) and tag it `hivemind:<version>`. `docker compose
- * up` builds the image on first run (tag absent), reuses it afterwards, and
- * rebuilds when a package upgrade bumps the tag. Nothing is pulled from a registry.
+ * (staged into ~/.hivemind/app) and tag it `hivemind:<version>-<real|fake>`. `docker compose
+ * up` is preceded by an explicit app build (cached layers are reused).
+ * The app image is never pulled from a registry.
  * INSTALL_EMBEDDINGS bakes the real torch embedder only when embeddings=true.
  */
 function appImageBuild(cfg: ResolvedConfig): string {
@@ -109,7 +146,8 @@ function appImageBuild(cfg: ResolvedConfig): string {
       context: ./app
       args:
         INSTALL_EMBEDDINGS: "${install}"
-    image: ${APP_IMAGE_NAME}:${cfg.imageTag}`;
+    image: ${composeScalar(appImageTag(cfg))}
+    pull_policy: never`;
 }
 
 /**
@@ -145,11 +183,13 @@ ${appImageBuild(cfg)}
     env_file:
       - ./.env
     ports:
-      - "\${MCP_PORT}:\${MCP_PORT}"
+      - "127.0.0.1:\${MCP_PORT}:\${MCP_PORT}"
     volumes:
       - type: bind
-        source: ${cfg.gdriveDesktopPath}
+        source: ${composeScalar(cfg.gdriveDesktopPath!)}
         target: ${CONTAINER_HIVEMIND_PATH}
+        bind:
+          create_host_path: false
     restart: unless-stopped
 
 volumes:
@@ -177,12 +217,14 @@ services:
       - apparmor:unconfined
     environment:
       RCLONE_CONFIG: /config/rclone.conf
+      HIVEMIND_FOLDER_ID: ${composeScalar(cfg.folderId!)}
     volumes:
       - ./rclone.conf:/config/rclone.conf:ro
       - type: bind
-        source: ${cfg.mountPath}
+        source: ${composeScalar(cfg.mountPath)}
         target: ${CONTAINER_HIVEMIND_PATH}
         bind:
+          create_host_path: false
           propagation: rshared
     command:
       - mount
@@ -229,17 +271,19 @@ ${appImageBuild(cfg)}
     depends_on:
       gdrive:
         condition: service_healthy
+        restart: true
       postgres:
         condition: service_healthy
     env_file:
       - ./.env
     ports:
-      - "\${MCP_PORT}:\${MCP_PORT}"
+      - "127.0.0.1:\${MCP_PORT}:\${MCP_PORT}"
     volumes:
       - type: bind
-        source: ${cfg.mountPath}
+        source: ${composeScalar(cfg.mountPath)}
         target: ${CONTAINER_HIVEMIND_PATH}
         bind:
+          create_host_path: false
           propagation: rslave
     restart: unless-stopped
 
@@ -269,12 +313,14 @@ function renderComposeSqlite(cfg: ResolvedConfig): string {
       - apparmor:unconfined
     environment:
       RCLONE_CONFIG: /config/rclone.conf
+      HIVEMIND_FOLDER_ID: ${composeScalar(cfg.folderId!)}
     volumes:
       - ./rclone.conf:/config/rclone.conf:ro
       - type: bind
-        source: ${cfg.mountPath}
+        source: ${composeScalar(cfg.mountPath)}
         target: ${CONTAINER_HIVEMIND_PATH}
         bind:
+          create_host_path: false
           propagation: rshared
     command:
       - mount
@@ -304,17 +350,21 @@ function renderComposeSqlite(cfg: ResolvedConfig): string {
     ? `    depends_on:
       gdrive:
         condition: service_healthy
+        restart: true
 `
     : '';
   const appMount = rclone
     ? `      - type: bind
-        source: ${cfg.mountPath}
+        source: ${composeScalar(cfg.mountPath)}
         target: ${CONTAINER_HIVEMIND_PATH}
         bind:
+          create_host_path: false
           propagation: rslave`
     : `      - type: bind
-        source: ${cfg.gdriveDesktopPath}
-        target: ${CONTAINER_HIVEMIND_PATH}`;
+        source: ${composeScalar(cfg.gdriveDesktopPath!)}
+        target: ${CONTAINER_HIVEMIND_PATH}
+        bind:
+          create_host_path: false`;
   return `# Generated by hivemind — regenerated from ~/.hivemind.conf (persistence: sqlite).
 # Embedded SQLite + sqlite-vec: no database server. The db is on a LOCAL docker
 # volume (never the Drive mount) to avoid cloud-sync corruption.
@@ -325,7 +375,7 @@ ${appImageBuild(cfg)}
 ${appDeps}    env_file:
       - ./.env
     ports:
-      - "\${MCP_PORT}:\${MCP_PORT}"
+      - "127.0.0.1:\${MCP_PORT}:\${MCP_PORT}"
     volumes:
       - hivemind-dbdata:/data
 ${appMount}
@@ -341,7 +391,7 @@ volumes:
 export interface WriteOptions {
   /** Existing rclone OAuth token to preserve/embed (from headless auth). */
   token?: string;
-  /** Skip rewriting rclone.conf (e.g. when `rclone config` already wrote it). */
+  /** Preserve existing credentials; managed folder settings are still reconciled. */
   skipRclone?: boolean;
 }
 
@@ -367,12 +417,12 @@ export function writeGeneratedFiles(cfg: ResolvedConfig, opts: WriteOptions = {}
 
   const result: GeneratedPaths = { env, compose };
 
-  // The gdrive_desktop backend never uses rclone, so no rclone.conf is written.
-  const skipRclone = opts.skipRclone || cfg.mountBackend === 'gdrive_desktop';
-  if (!skipRclone) {
+  // Reconcile the folder even when OAuth has already configured the remote.
+  // Preserve credentials and other remote options (client IDs, team drives, etc.).
+  if (cfg.mountBackend !== 'gdrive_desktop') {
     const rclone = rcloneConfPath();
-    writeFileSync(rclone, renderRcloneConf(cfg, opts.token ?? ''), 'utf8');
-    // rclone.conf holds a secret; restrict permissions.
+    const existing = existsSync(rclone) ? readFileSync(rclone, 'utf8') : '';
+    writeFileSync(rclone, reconcileRcloneConf(cfg, existing, opts.token), { encoding: 'utf8', mode: 0o600 });
     chmodSync(rclone, 0o600);
     result.rclone = rclone;
   }

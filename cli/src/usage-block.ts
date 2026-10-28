@@ -31,7 +31,7 @@ takes ~60-90s), then retry.
 
 ### Search before you work
 Before starting a task, search first so you don't redo work or re-hit a known wall:
-\`memory_search_task\` (by ticket), \`memory_search\` (semantic — phrase it as the problem
+\`memory_list_recent\` (with \`jira_ticket\`), \`memory_search\` (semantic — phrase it as the problem
 you're facing), and a filtered \`memory_list_recent\` on open blockers.
 
 ### Record aggressively — this is the point of Hivemind

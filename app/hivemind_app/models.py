@@ -40,6 +40,7 @@ from sqlalchemy.types import TypeDecorator
 
 from .config import DEFAULT_EMBEDDING_DIM
 from .db import Base
+from .serialization import validate_embedding
 
 # Embedding dimension is fixed at the schema level; the runtime embedder must agree.
 EMBEDDING_DIM = DEFAULT_EMBEDDING_DIM
@@ -75,6 +76,7 @@ class Embedding(TypeDecorator[list[float]]):
     def process_bind_param(self, value: Any, dialect: Any) -> Any:
         if value is None:
             return None
+        validate_embedding(value, self.dim)
         if dialect.name == "postgresql":
             return value
         return struct.pack(f"<{len(value)}f", *value)
@@ -178,3 +180,18 @@ class IngestedFile(Base):
     ingested_at: Mapped[datetime] = mapped_column(
         TZDateTime, nullable=False, server_default=func.now()
     )
+
+
+class StateBinding(Base):
+    """Immutable runtime identity and embedding space for this database."""
+
+    __tablename__ = "state_binding"
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ConflictedEvent(Base):
+    """UUIDs with inconsistent payloads are quarantined on every replica."""
+
+    __tablename__ = "conflicted_events"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)

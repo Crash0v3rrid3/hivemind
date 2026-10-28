@@ -9,9 +9,10 @@ the controlled vocabularies.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import (
     BaseModel,
@@ -27,6 +28,14 @@ from .config import (
     STATUS_VALUES,
 )
 
+MAX_TITLE_LENGTH = 1000
+MAX_BODY_LENGTH = 100_000
+MAX_QUERY_LENGTH = 10_000
+MAX_TAG_LENGTH = 100
+MAX_TAGS = 100
+MAX_METADATA_BYTES = 100_000
+Tag = Annotated[str, Field(max_length=MAX_TAG_LENGTH)]
+
 # ``tombstone`` is internal (produced only by delete); clients may not set it.
 _CLIENT_EVENT_TYPES = frozenset(EVENT_TYPES - {"tombstone"})
 
@@ -38,6 +47,12 @@ def _reject_author_in_metadata(value: dict[str, Any]) -> dict[str, Any]:
     for key in value:
         if key.lower() == "author":
             raise ValueError("author is derived from identity and must not appear in metadata")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError("metadata must contain valid JSON values") from exc
+    if len(encoded) > MAX_METADATA_BYTES:
+        raise ValueError(f"metadata must not exceed {MAX_METADATA_BYTES} JSON bytes")
     return value
 
 
@@ -78,13 +93,13 @@ class MemoryAddRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    title: str = Field(min_length=1)
-    body: str
+    title: str = Field(min_length=1, max_length=MAX_TITLE_LENGTH)
+    body: str = Field(max_length=MAX_BODY_LENGTH)
     jira_project: str
     jira_ticket: str | None = None
     event_type: str = "update"
     status: str = "info"
-    tags: list[str] = Field(default_factory=list)
+    tags: list[Tag] = Field(default_factory=list, max_length=MAX_TAGS)
     metadata: dict[str, Any] = Field(default_factory=dict)
     ts: datetime | None = None
 
@@ -101,13 +116,13 @@ class MemoryUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: uuid.UUID
-    title: str = Field(min_length=1)
-    body: str
+    title: str = Field(min_length=1, max_length=MAX_TITLE_LENGTH)
+    body: str = Field(max_length=MAX_BODY_LENGTH)
     jira_project: str
     jira_ticket: str | None = None
     event_type: str = "update"
     status: str = "info"
-    tags: list[str] = Field(default_factory=list)
+    tags: list[Tag] = Field(default_factory=list, max_length=MAX_TAGS)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     _v_project = field_validator("jira_project")(_validate_jira_project)
@@ -129,7 +144,7 @@ class SearchFilters(BaseModel):
     jira_ticket: str | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
-    tags: list[str] | None = None
+    tags: list[Tag] | None = Field(default=None, max_length=MAX_TAGS)
 
 
 class EventOut(BaseModel):

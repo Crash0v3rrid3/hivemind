@@ -21,6 +21,8 @@ import {
   uninstallUsageInstructions,
 } from '../claude.js';
 import { composeConfigExists, composeDown } from '../docker.js';
+import { nixDown, nixSocketPath, nixStateDir } from '../nix.js';
+import { clearBackendRecord, recordedBackend } from './lifecycle.js';
 import { guardScriptPath, hivemindDir } from '../paths.js';
 
 function doUninstallUsage(): void {
@@ -67,12 +69,31 @@ export function register(program: Command): void {
     .action((opts: { purge?: boolean }) => {
       const purge = Boolean(opts.purge);
 
-      if (composeConfigExists()) {
-        const code = composeDown({ volumes: purge });
-        if (code !== 0) console.warn('uninstall: `down` reported a non-zero exit (continuing).');
-      } else {
-        console.log('No generated stack found (~/.hivemind/docker-compose.yml absent) — skipping down.');
+      // Generated artifacts identify previously started backends even if the config
+      // has since changed. Stop both when both have state before removing anything.
+      let backend: 'nix' | 'docker' | undefined;
+      try {
+        backend = recordedBackend();
+      } catch (err) {
+        console.error(`uninstall: ${(err as Error).message}`);
+        process.exitCode = 1;
+        return;
       }
+      if (backend === 'nix' || existsSync(nixSocketPath()) || existsSync(nixStateDir())) {
+        if (nixDown() !== 0) {
+          console.error('uninstall: Nix shutdown failed; local state retained.');
+          process.exitCode = 1;
+          return;
+        }
+      }
+      if (backend === 'docker' || composeConfigExists()) {
+        if (composeDown({ volumes: purge }) !== 0) {
+          console.error('uninstall: Docker shutdown failed; local state retained.');
+          process.exitCode = 1;
+          return;
+        }
+      }
+      clearBackendRecord();
 
       doUninstallEnforcement();
       doUninstallMcp();
@@ -91,7 +112,9 @@ export function register(program: Command): void {
         '\nHivemind uninstalled from this node. Your shared Drive folder (team memory) was NOT touched.',
       );
       if (!purge) {
-        console.log('Re-run with --purge to also delete local data (~/.hivemind, DB volume, image).');
+        console.log(
+          'Re-run with --purge to also delete local data (~/.hivemind, DB volume, image).',
+        );
       }
     });
 }

@@ -9,6 +9,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import net from 'node:net';
+import { hiveIdentity } from './generate.js';
 import path from 'node:path';
 import { hostHivePath, type ResolvedConfig } from './config.js';
 import { hivemindAppDir, hivemindDir } from './paths.js';
@@ -81,6 +82,7 @@ export function nixUpEnv(cfg: ResolvedConfig): NodeJS.ProcessEnv {
   return {
     ...nixStateEnv(),
     HIVEMIND_HIVE: hostHivePath(cfg),
+    HIVEMIND_ID: hiveIdentity(cfg),
     HIVEMIND_PGPORT: String(NIX_PG_PORT),
     HIVEMIND_PERSISTENCE: cfg.persistence,
     OWNER_HANDLE: cfg.ownerHandle,
@@ -107,13 +109,17 @@ function runNix(args: string[], env: NodeJS.ProcessEnv): number {
 }
 
 /** `nix build <app>#up --no-link` to warm the closure during setup. */
-export function nixBuildUp(): number {
-  return runNix(['build', appFlakeRef('up'), '--no-link'], {});
+export function nixUpAttr(cfg: Pick<ResolvedConfig, 'embeddings'>): string {
+  return cfg.embeddings ? 'up-real' : 'up-fake';
+}
+
+export function nixBuildUp(cfg: Pick<ResolvedConfig, 'embeddings'> = { embeddings: false }): number {
+  return runNix(['build', appFlakeRef(nixUpAttr(cfg)), '--no-link'], {});
 }
 
 /** `nix run <app>#up -- -D` (detached) with the full runtime env. */
 export function nixUp(cfg: ResolvedConfig): number {
-  return runNix(['run', appFlakeRef('up'), '--', '-D'], nixUpEnv(cfg));
+  return runNix(['run', appFlakeRef(nixUpAttr(cfg)), '--', '-D'], nixUpEnv(cfg));
 }
 
 /** `nix run <app>#down`. */
@@ -156,7 +162,10 @@ export async function waitHealthy(port: number, attempts = 45): Promise<boolean>
       const res = await fetch(`http://127.0.0.1:${port}/healthz`, {
         signal: AbortSignal.timeout(2000),
       });
-      if (res.ok) return true;
+      if (res.status === 200) {
+        const body = (await res.json()) as { service?: unknown; status?: unknown };
+        if (body.service === 'hivemind' && body.status === 'ok') return true;
+      }
     } catch {
       // retry
     }

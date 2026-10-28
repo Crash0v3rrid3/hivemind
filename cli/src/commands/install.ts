@@ -97,13 +97,16 @@ export function register(program: Command): void {
         process.exitCode = upCode;
         return;
       }
-      console.log('First `up` compiled the app image locally (one-time); later runs reuse the cache.');
+      console.log(
+        'First `up` compiled the app image locally (one-time); later runs reuse the cache.',
+      );
       const doctorCode = await runDoctor();
       if (doctorCode !== 0) {
-        console.warn(
-          'install: doctor reported issues (the stack may still be booting) — ' +
-            'continuing with Claude integration; re-run `hivemind doctor` shortly.',
+        console.error(
+          'install: critical doctor checks failed; fix them before activating Claude integration.',
         );
+        process.exitCode = doctorCode;
+        return;
       }
       doInstallUsage();
       doInstallMcp();

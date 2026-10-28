@@ -28,10 +28,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an honest status box) with backend-neutral persistence wording.
 - **Breaking (local only):** the Postgres role/password was renamed from
   `teamtrail` to `hivemind`. Existing local Postgres volumes created under the old
-  role must be re-initialized (`hivemind down` + remove the volume, then `up`);
-  SQLite nodes and the NDJSON files on the mount are unaffected.
+  role require an explicit migration. Back up the database and confirm all local
+  records have exported before changing roles or replacing storage. Do not delete
+  the old volume while it contains pending local writes. SQLite nodes and the
+  NDJSON files on the mount are unaffected.
 
 ### Fixed
+- Review hardening across sync integrity, identity binding, query correctness, MCP
+  validation, CLI activation/shutdown, deployment and release gates. See the
+  [R01–R40 remediation and upgrade guide](docs/review-remediation.md). Existing
+  nonempty databases require explicit provenance migration; back them up first.
 - `make typecheck` now runs mypy against `app/pyproject.toml` (via `--config-file`)
   so it applies the intended `--strict` config and the third-party import-ignore
   overrides; previously, invoked from the repo root, mypy silently fell back to its

@@ -1,18 +1,27 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import * as childProcess from 'node:child_process';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   _resetComposeCmd,
+  _resetBuildkit,
+  composeUp,
   composeBaseArgs,
   dockerPullArgs,
   POSTGRES_IMAGE,
   resolveComposeCmd,
 } from '../src/docker.js';
 
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+}));
+
 const origEnv = { ...process.env };
 
 afterEach(() => {
   process.env = { ...origEnv };
   _resetComposeCmd();
+  _resetBuildkit();
+  vi.restoreAllMocks();
 });
 
 describe('composeBaseArgs', () => {
@@ -51,5 +60,21 @@ describe('resolveComposeCmd', () => {
         first.cmd === 'docker' ? ['compose'] : [],
       );
     }
+  });
+});
+
+
+describe('composeUp local build', () => {
+  it('builds the app before starting so changed build args cannot reuse a stale image', () => {
+    const spawn = vi.spyOn(childProcess, 'spawnSync').mockReturnValue({ status: 0, stdout: '', stderr: '', pid: 1, output: [] });
+    expect(composeUp()).toBe(0);
+    const commands = spawn.mock.calls.map(call => (call[1] as string[]).join(' '));
+    expect(commands.findIndex(command => command.endsWith('build app'))).toBeLessThan(commands.findIndex(command => command.endsWith('up -d')));
+  });
+
+  it('does not start containers after a failed local app build', () => {
+    const spawn = vi.spyOn(childProcess, 'spawnSync').mockImplementation((_cmd, args) => ({ status: (args as string[]).includes('build') ? 9 : 0, stdout: '', stderr: '', pid: 1, output: [] }));
+    expect(composeUp()).toBe(9);
+    expect(spawn.mock.calls.some(call => (call[1] as string[]).includes('up'))).toBe(false);
   });
 });

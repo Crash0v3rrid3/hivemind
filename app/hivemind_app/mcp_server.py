@@ -15,14 +15,18 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from pathlib import Path
+from typing import Annotated, Any
 
 import structlog
 from fastapi import FastAPI
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import ContentBlock, Tool
+from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from .config import Identity, Settings
@@ -31,13 +35,18 @@ from .embeddings import Embedder, resolve_embedder
 from .loops import run_export_loop, run_import_loop
 from .repository import Repository, init_schema
 from .schemas import (
+    MAX_BODY_LENGTH,
+    MAX_QUERY_LENGTH,
+    MAX_TAGS,
+    MAX_TITLE_LENGTH,
     EventOut,
     MemoryAddRequest,
     MemoryUpdateRequest,
     SearchFilters,
+    Tag,
 )
 from .serialization import EventRecord
-from .service import MemoryService
+from .service import MAX_READ_LIMIT, MemoryService
 
 log = structlog.get_logger(__name__)
 
@@ -47,19 +56,40 @@ def _public(record: EventRecord) -> dict[str, Any]:
     return EventOut.model_validate(record).model_dump(mode="json")
 
 
+class StrictFastMCP(FastMCP):
+    """Reject unknown arguments at the actual tools/call boundary."""
+
+    async def list_tools(self) -> list[Tool]:
+        registered = await super().list_tools()
+        for tool in registered:
+            tool.inputSchema["additionalProperties"] = False
+        return registered
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> Sequence[ContentBlock] | dict[str, Any]:
+        for tool in await self.list_tools():
+            if tool.name == name:
+                unknown = arguments.keys() - tool.inputSchema.get("properties", {}).keys()
+                if unknown:
+                    raise ToolError(f"Unexpected arguments: {', '.join(sorted(unknown))}")
+                break
+        return await super().call_tool(name, arguments)
+
+
 def _build_mcp(service: MemoryService) -> FastMCP:
     """Register all MCP tools against ``service`` and return the FastMCP app."""
-    mcp: FastMCP = FastMCP("hivemind")
+    mcp: FastMCP = StrictFastMCP("hivemind")
 
     @mcp.tool()
     async def memory_add(
-        title: str,
-        body: str,
+        title: Annotated[str, Field(min_length=1, max_length=MAX_TITLE_LENGTH)],
+        body: Annotated[str, Field(max_length=MAX_BODY_LENGTH)],
         jira_project: str,
         jira_ticket: str | None = None,
         event_type: str = "update",
         status: str = "info",
-        tags: list[str] | None = None,
+        tags: Annotated[list[Tag] | None, Field(max_length=MAX_TAGS)] = None,
         metadata: dict[str, Any] | None = None,
         ts: datetime | None = None,
     ) -> dict[str, Any]:
@@ -80,13 +110,13 @@ def _build_mcp(service: MemoryService) -> FastMCP:
     @mcp.tool()
     async def memory_update(
         id: str,
-        title: str,
-        body: str,
+        title: Annotated[str, Field(min_length=1, max_length=MAX_TITLE_LENGTH)],
+        body: Annotated[str, Field(max_length=MAX_BODY_LENGTH)],
         jira_project: str,
         jira_ticket: str | None = None,
         event_type: str = "update",
         status: str = "info",
-        tags: list[str] | None = None,
+        tags: Annotated[list[Tag] | None, Field(max_length=MAX_TAGS)] = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Supersede one of your OWN records with a new revision."""
@@ -116,7 +146,7 @@ def _build_mcp(service: MemoryService) -> FastMCP:
 
     @mcp.tool()
     async def memory_list_recent(
-        limit: int = 50,
+        limit: Annotated[int, Field(ge=1, le=MAX_READ_LIMIT, strict=True)] = 50,
         author: str | None = None,
         event_type: str | None = None,
         status: str | None = None,
@@ -124,7 +154,7 @@ def _build_mcp(service: MemoryService) -> FastMCP:
         jira_ticket: str | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
-        tags: list[str] | None = None,
+        tags: Annotated[list[Tag] | None, Field(max_length=MAX_TAGS)] = None,
     ) -> list[dict[str, Any]]:
         """List the most recent visible records, narrowed by optional filters."""
         filters = SearchFilters(
@@ -142,8 +172,8 @@ def _build_mcp(service: MemoryService) -> FastMCP:
 
     @mcp.tool()
     async def memory_search(
-        query: str,
-        top_k: int = 20,
+        query: Annotated[str, Field(min_length=1, max_length=MAX_QUERY_LENGTH)],
+        top_k: Annotated[int, Field(ge=1, le=MAX_READ_LIMIT, strict=True)] = 20,
         author: str | None = None,
         event_type: str | None = None,
         status: str | None = None,
@@ -151,7 +181,7 @@ def _build_mcp(service: MemoryService) -> FastMCP:
         jira_ticket: str | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
-        tags: list[str] | None = None,
+        tags: Annotated[list[Tag] | None, Field(max_length=MAX_TAGS)] = None,
     ) -> list[dict[str, Any]]:
         """Semantic search over the whole team's memory."""
         filters = SearchFilters(
@@ -217,7 +247,7 @@ def create_app(
     sessionmaker = create_sessionmaker(eng)
     repo = Repository(sessionmaker)
     identity = Identity(owner_handle=cfg.owner_handle, roster=cfg.roster)
-    service = MemoryService(repo, emb, identity, clock=clock)
+    service = MemoryService(repo, emb, identity, clock=clock, embedding_model=cfg.embedding_model)
     root = hive_root if hive_root is not None else cfg.hivemind_path
 
     mcp = _build_mcp(service)
@@ -229,6 +259,9 @@ def create_app(
         # are not run automatically by Starlette).
         async with mcp_app.router.lifespan_context(mcp_app):
             await init_schema(eng)
+            await repo.bind_identity(
+                cfg.owner_handle, cfg.hive_id or str(Path(root).resolve()), cfg.embedding_model
+            )
             log.info("hivemind.schema.ready")
 
             stop = asyncio.Event()
@@ -272,7 +305,7 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
-        return {"status": "ok", "owner": cfg.owner_handle}
+        return {"service": "hivemind", "status": "ok", "owner": cfg.owner_handle}
 
     app.mount("/", mcp_app)
     return app

@@ -13,18 +13,20 @@ async repository protocol, so a fake repository drives it in tests.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
 
 from .config import Identity
 from .embeddings import Embedder, build_embedding_text, zero_vector
-from .schemas import MemoryAddRequest, MemoryUpdateRequest, SearchFilters
+from .schemas import MAX_QUERY_LENGTH, MemoryAddRequest, MemoryUpdateRequest, SearchFilters
 from .serialization import EventRecord, day_bucket
 
 # Default over-fetch pool floor for both recent and search (SPEC §8).
 POOL_FLOOR = 200
+MAX_READ_LIMIT = 1000
 
 
 class NotOwnRecordError(PermissionError):
@@ -49,10 +51,17 @@ class RepositoryLike(Protocol):
 
     async def hidden_ids(self) -> set[uuid.UUID]: ...
 
-    async def recent_candidates(self, pool: int) -> list[EventRecord]: ...
+    async def recent_candidates(
+        self,
+        pool: int | None,
+        *,
+        filters: SearchFilters | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[EventRecord]: ...
 
     async def nearest_candidates(
-        self, query_vec: list[float], pool: int
+        self, query_vec: list[float], pool: int, *, filters: SearchFilters | None = None
     ) -> list[tuple[EventRecord, float]]: ...
 
     async def history_chain(self, event_id: uuid.UUID) -> list[EventRecord]: ...
@@ -134,7 +143,10 @@ class MemoryService:
         embedder: Embedder,
         identity: Identity,
         clock: Callable[[], datetime] | None = None,
+        embedding_model: str | None = None,
     ) -> None:
+        self._embedding_model = embedding_model
+        self._embed_lock = asyncio.Lock()
         self._repo = repository
         self._embedder = embedder
         self._identity = identity
@@ -156,6 +168,7 @@ class MemoryService:
         ts = _as_utc(req.ts) if req.ts is not None else now
         record = EventRecord(
             id=uuid.uuid4(),
+            embedding_model=self._embedding_model,
             author=self.owner_handle,  # identity, never client input
             event_type=req.event_type,
             status=req.status,
@@ -169,7 +182,7 @@ class MemoryService:
             deletes=None,
             ts=ts,
             created_at=now,
-            embedding=self._embed(req.title, req.body),
+            embedding=await self._embed(build_embedding_text(req.title, req.body)),
         )
         await self._repo.insert_local(record)
         return record
@@ -184,6 +197,7 @@ class MemoryService:
         now = self._clock()
         record = EventRecord(
             id=uuid.uuid4(),
+            embedding_model=self._embedding_model,
             author=self.owner_handle,
             event_type=req.event_type,
             status=req.status,
@@ -197,7 +211,7 @@ class MemoryService:
             deletes=None,
             ts=now,
             created_at=now,
-            embedding=self._embed(req.title, req.body),
+            embedding=await self._embed(build_embedding_text(req.title, req.body)),
         )
         await self._repo.insert_local(record)
         return record
@@ -212,6 +226,7 @@ class MemoryService:
         now = self._clock()
         record = EventRecord(
             id=uuid.uuid4(),
+            embedding_model=self._embedding_model,
             author=self.owner_handle,
             event_type="tombstone",
             status="info",
@@ -240,9 +255,10 @@ class MemoryService:
         self, limit: int = 50, filters: SearchFilters | None = None
     ) -> list[EventRecord]:
         """Most-recent visible records across both tables, filtered."""
+        _validate_limit(limit, "limit")
         hidden = await self._repo.hidden_ids()
         pool = max(limit, POOL_FLOOR)
-        candidates = await self._repo.recent_candidates(pool)
+        candidates = await self._repo.recent_candidates(pool, filters=filters)
         visible = drop_hidden(candidates, hidden)
         filtered = [r for r in visible if matches_filters(r, filters)]
         filtered.sort(key=lambda r: _as_utc(r.ts), reverse=True)
@@ -255,9 +271,12 @@ class MemoryService:
         filters: SearchFilters | None = None,
     ) -> list[EventRecord]:
         """Semantic search across both tables with pool over-fetch + re-rank."""
-        query_vec = self._embedder.embed(query)
+        _validate_limit(top_k, "top_k")
+        if not isinstance(query, str) or not 1 <= len(query) <= MAX_QUERY_LENGTH:
+            raise ValueError(f"query must contain 1 to {MAX_QUERY_LENGTH} characters")
+        query_vec = await self._embed(query)
         pool = max(top_k, POOL_FLOOR)
-        hits = await self._repo.nearest_candidates(query_vec, pool)
+        hits = await self._repo.nearest_candidates(query_vec, pool, filters=filters)
         hits = dedupe_hits(hits)
         hidden = await self._repo.hidden_ids()
         visible = [(r, d) for (r, d) in hits if r.id not in hidden and r.event_type != "tombstone"]
@@ -274,9 +293,17 @@ class MemoryService:
     ) -> dict[str, object]:
         """Per-author, per-event-type counts of visible records for a UTC day."""
         target_day = day or day_bucket(self._clock())
+        parsed_day = date.fromisoformat(target_day)
+        if parsed_day.isoformat() != target_day:
+            raise ValueError("day must use YYYY-MM-DD format")
+        since = datetime.combine(parsed_day, time.min, tzinfo=UTC)
         hidden = await self._repo.hidden_ids()
-        # Fetch a large pool; a single day of team memory fits comfortably.
-        candidates = await self._repo.recent_candidates(max(POOL_FLOOR, 10000))
+        candidates = await self._repo.recent_candidates(
+            None,
+            filters=SearchFilters(author=author),
+            since=since,
+            until=since + timedelta(days=1),
+        )
         visible = drop_hidden(candidates, hidden)
 
         authors: dict[str, dict[str, int]] = {}
@@ -294,8 +321,15 @@ class MemoryService:
 
     # -- internals ------------------------------------------------------------
 
-    def _embed(self, title: str, body: str) -> list[float]:
-        vec = self._embedder.embed(build_embedding_text(title, body))
+    async def _embed(self, text: str) -> list[float]:
+        # Serialize lazy model initialization/inference while leaving the event loop free.
+        async with self._embed_lock:
+            vec = await asyncio.to_thread(self._embedder.embed, text)
         if len(vec) != self._embedder.dim:
             raise ValueError(f"embedder returned dim {len(vec)}, expected {self._embedder.dim}")
         return vec
+
+
+def _validate_limit(value: int, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_READ_LIMIT:
+        raise ValueError(f"{name} must be an integer between 1 and {MAX_READ_LIMIT}")
