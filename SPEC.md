@@ -343,7 +343,7 @@ mcp_port          = 7777
 # export_interval_sec = 60
 # import_interval_sec = 60
 # embeddings          = true   # true = real BAAI embedder (fastembed/onnx); false = fake (instant)
-# image_tag           = "0.1.0"
+# image_tag           = "0.2.0"
 ```
 
 Keys: `username` (required; -> OWNER_HANDLE; handle regex `^[a-z0-9][a-z0-9._-]*$`);

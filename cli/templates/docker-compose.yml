@@ -68,7 +68,7 @@ services:
     restart: unless-stopped
 
   app:
-    image: hivemind:0.1.0
+    image: hivemind:0.2.0
     container_name: hivemind-app
     depends_on:
       gdrive:
