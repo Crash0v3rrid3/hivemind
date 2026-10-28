@@ -6,6 +6,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Upgrade requirements
+- Stop and upgrade every hive member together. Production exports now use wire
+  schema v2 with required model provenance; mixed 0.1.x/0.2.x nodes are unsupported.
+- Back up existing databases, including pending local writes, and follow the
+  [provenance migration guide](docs/review-remediation.md) before restarting.
+  Retain legacy archives and republish verified owner records as new v2 files.
+
 ### Added
 - Configurable persistence backend: embedded **SQLite + sqlite-vec** as an
   alternative to Postgres + pgvector, selected with `persistence` in
@@ -14,10 +23,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `deploy_backend` on macOS, removing the hard Docker dependency.
 - Project docs: explainer page under `docs/` (GitHub Pages), CONTRIBUTING,
   SECURITY, issue/PR templates, and an end-to-end example walkthrough.
-- `schema_version` on every NDJSON record: an explicit, frozen-within-a-major
-  on-disk format contract with forward-compatible reads (unknown keys ignored,
-  a missing version treated as `1`). Documented in SPEC §5.
-- CI now builds the flake on **Intel macOS** (`macos-13`, x86_64-darwin) as well
+- Explicit NDJSON wire schema versions, independent of package versions. V2
+  requires model provenance; v1 and missing-version records are legacy data
+  requiring explicit migration. Unknown versions are rejected. See SPEC §5.
+- CI now builds the flake on **Intel macOS** (`macos-15-intel`, x86_64-darwin) as well
   as Apple Silicon, and runs the **Postgres integration** suite against the
   default backend before publishing.
 - End-to-end cross-node convergence test proving write → export → peer-import →
@@ -38,6 +47,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   administrator roster in doctor, and publish quarantined local evidence so replicas
   converge. The provenance-required wire format is explicitly schema v2.
 - CI uses supported macOS 15 ARM/Intel runners and the current pinned Nix installer.
+  Intel uses a supported Nixpkgs Darwin pin with targeted dependency metadata and
+  test fixes. Model cache metadata is canonicalized with verified per-platform hashes.
 - Review hardening across sync integrity, identity binding, query correctness, MCP
   validation, CLI activation/shutdown, deployment and release gates. See the
   [R01–R40 remediation and upgrade guide](docs/review-remediation.md). Existing

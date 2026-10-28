@@ -251,7 +251,7 @@ hivemind/
 
 ## Releasing
 
-Pushing a tag (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`, which publishes the CLI to
+Pushing a tag (e.g. `v0.2.0`) triggers `.github/workflows/release.yml`, which publishes the CLI to
 GitHub Packages. The package is **self-sufficient** — it bundles the app source and `hivemind up` builds the
 image locally — so nothing is pulled from a registry at runtime. A stack change ships as a new
 package version, which rebuilds the local image
