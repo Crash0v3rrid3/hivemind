@@ -21,6 +21,15 @@
                 pgvector = pythonPrev.pgvector.overridePythonAttrs (_: {
                   doCheck = final.lib.meta.availableOn final.stdenv.buildPlatform final.postgresqlTestHook;
                 });
+                # The 26.05 binding's dynamic version falls back to 0.0.0 without
+                # Git metadata. Match the actual sqlite-vec source/library version,
+                # as the newer nixpkgs pyprojectVersionPatchHook does upstream.
+                sqlite-vec = pythonPrev.sqlite-vec.overridePythonAttrs (old: {
+                  postPatch = old.postPatch + ''
+                    substituteInPlace pyproject.toml \
+                      --replace-fail 'dynamic = ["version"]' 'version = "${old.version}"'
+                  '';
+                });
                 # datasets is used only by TestTrainFromIterators, already disabled
                 # upstream for network access. Avoid its broken Intel Arrow closure
                 # without disabling any additional tests or import checks.
