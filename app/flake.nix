@@ -145,13 +145,28 @@ processes:
             nativeBuildInputs = [ modelPy ];
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
-            outputHash = "sha256-H4YTiwY2O3ECxWH8ZNtpWmqiSLUK1J4ONCSP5kpR+Fc=";
+            # Both pins fetch snapshot aa8f8b060edb00e03bfdd08813a2949946c8ba55:
+            # model_optimized.onnx SHA256 51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431.
+            # Hub 1.30 (ARM) adds trees/<commit>.json; Hub 1.16 (Intel) does not.
+            # Model/tokenizer bytes are identical; pin each dependency's cache layout.
+            outputHash = if pkgs.stdenv.hostPlatform.system == "x86_64-darwin"
+              then "sha256-ka/fJG9wtaxxuaeGziIWG/Ssw63WY0WkArkvyLaf6Vo="
+              else "sha256-cQ3VocLQKAE35eVduQkVPDcoK1eFtppaNabXoI4jr3A=";
             SSL_CERT_FILE = cacertBundle;
           } ''
             export HOME="$TMPDIR"
             export FASTEMBED_CACHE_PATH="$out"
             mkdir -p "$out"
             python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+            # FastEmbed writes this JSON in filesystem traversal order. Canonicalize
+            # only its bookkeeping so cache hashes do not depend on directory order.
+            python - <<'PYTHON'
+            import json
+            import os
+            from pathlib import Path
+            metadata = Path(os.environ["FASTEMBED_CACHE_PATH"]) / "models--qdrant--bge-small-en-v1.5-onnx-q" / "files_metadata.json"
+            metadata.write_text(json.dumps(json.loads(metadata.read_text()), sort_keys=True, separators=(",", ":")))
+            PYTHON
             rm -rf "$out/.locks" || true
             find "$out" -name '*.lock' -delete 2>/dev/null || true
           '';
