@@ -175,23 +175,41 @@ friction, ai_session, tombstone` (tombstone is internal, produced only by delete
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "uuid", "author": "alice", "event_type": "decision", "status": "info",
   "title": "…", "body": "…", "jira_project": "BETEL", "jira_ticket": "BETEL-42",
   "tags": ["a","b"], "metadata": {}, "supersedes": null, "deletes": null,
   "ts": "2026-08-19T10:00:00Z", "created_at": "2026-08-19T10:00:00Z",
-  "embedding": [ /* 384 floats, normalized */ ]
+  "embedding": [ /* 384 floats, normalized */ ],
+  "embedding_model": "BAAI/bge-small-en-v1.5"
 }
 ```
 
 `embedding` is carried so importers never re-embed. The file's `author` is informational — the
 authoritative author is the owning folder handle, which the importer stamps.
 
-**Format version.** `schema_version` (currently `1`) declares the on-disk format. The format is
-**frozen within a major version**: changes are additive only (new optional keys), so a record
-written by any v1.x node is readable by every other v1.x node. Readers **ignore unknown keys**
-(forward-compatible) and treat a missing `schema_version` as `1`. A breaking format change requires
-a new major and a bump of `schema_version`.
+**Model provenance.** New records carry `embedding_model`. Bound databases reject
+missing or mismatched provenance; see [upgrade instructions](docs/review-remediation.md).
+The database is also bound to owner and hive identity, and cannot be silently reused.
+
+**Format version.** `schema_version` is the wire-format version, independent of the
+application's alpha package version. Current writers emit **version 2**, which requires a
+nonempty `embedding_model`. Readers accept integer versions `1` and `2` only; unsupported
+versions, noninteger versions and v2 records missing valid provenance are rejected. Unknown
+optional keys within a supported version are ignored. Further incompatible wire changes must
+increment this schema version and document the upgrade procedure.
+
+A missing version means legacy v1. V1 records decode with **unknown model provenance**, even
+if an optional extension key claims a model. Parsing v1 exists for offline inspection and
+explicit migration, not automatic production import: bound repositories reject these records.
+The low-level serializer can emit v1 when handed a record with unknown provenance, for legacy
+migration tooling; production service writes and bound-repository exports carry a model and
+therefore emit v2. This is a deliberate compatibility break, not an additive v1 field.
+
+Upgrade all hive members together after backing up their databases. Old readers may ignore
+schema versions and cannot safely enforce v2 provenance; mixed old/new nodes are unsupported.
+Follow the [migration and republishing procedure](docs/review-remediation.md) before resuming
+shared writes. No existing archive is silently relabeled with a guessed model.
 
 ---
 
@@ -203,9 +221,11 @@ No row is mutated after insert.
   OWNER_HANDLE (own records only).
 - Delete → new record, `event_type="tombstone"`, `deletes=<target_id>`, empty title/body,
   zero-vector embedding. Own records only.
-- Visible state: `hidden_ids` = {non-null `supersedes`} ∪ {non-null `deletes`} across both tables.
+- Visible state: `hidden_ids` contains authorized same-author `supersedes` and `deletes`
+  targets across both tables. Conflicting UUIDs are quarantined and excluded.
   A record is visible iff its id ∉ hidden_ids and its own event_type != 'tombstone'.
-- History for an id = the chain linked by `supersedes`, ordered by `created_at`.
+- History for an id = the connected component of authorized `supersedes` edges,
+  including every branch and the requested anchor, ordered by `created_at` and id.
 
 ```mermaid
 flowchart TB
@@ -223,18 +243,23 @@ flowchart TB
 ## 7. Export & import loops
 
 **Export** (every `EXPORT_INTERVAL_SEC`, default 60):
-1. `SELECT * FROM local_events WHERE exported_at IS NULL ORDER BY created_at`. If none, sleep.
+1. Read a bounded batch of pending local records, including original records whose IDs are
+   quarantined. Exporting this original evidence lets peers detect the same conflicts;
+   quarantine still excludes conflicting IDs from visible reads. If none, sleep.
 2. Group by UTC day of `ts`.
-3. For each group: ensure `<hive>/<OWNER_HANDLE>/<day>/`; serialize to a NEW batch file (atomic).
+3. Require the existing hive and provisioned owner folder; create only its day directory
+   and serialize to a NEW batch file (atomic).
 4. `UPDATE local_events SET exported_at = now() WHERE id IN (...)`.
 
 **Import** (every `IMPORT_INTERVAL_SEC`, default 60):
-1. List immediate subfolders of `<hive>/`. For each whose name ∈ roster and != OWNER_HANDLE:
+1. List immediate subfolders of `<hive>/`. Include the owner folder and peers in the
+   configured roster (or validated admin `roster.json` when present). For each:
    set `author = folder_name`.
-2. List `*.ndjson` under it. For each path not in `ingested_files`: read complete lines, set
-   `author = folder_name` (ignore file's author), `INSERT ... ON CONFLICT (id) DO NOTHING`
-   (embedding from file). After a file is fully processed, record it in `ingested_files`.
-3. Never write to others' folders; never import your own folder.
+2. List `*.ndjson` under it. Defer incomplete files; validate complete records and vectors,
+   stamp `author = folder_name`, and import in a transaction with its ingested marker.
+   Equal UUIDs with different payloads are quarantined. A bad file does not stop later files.
+3. Owner files restore local rows marked already exported; peer files populate team rows.
+   Never write to other members' folders.
 
 Make the loop bodies callable once (e.g. `export_once()`, `import_once()`) so tests can drive them
 deterministically without the sleep scheduler. Inject the hive filesystem root and the clock.
@@ -272,9 +297,9 @@ sequenceDiagram
 - Backend selection (`resolve_embedder`): `EMBEDDING_MODEL=fake` selects `FakeEmbedder` (dependency-free tests/CI); any other value uses the fastembed embedder. `fastembed`/`onnxruntime` are an optional extra (`pip install .[embeddings]`; Dockerfile `ARG INSTALL_EMBEDDINGS`), so the core/test image needs neither. With `INSTALL_EMBEDDINGS=1` the small ONNX model is baked into the image at build time, so the first query is instant and needs no network; because there is no torch, the image is much smaller (~300-400 MB vs ~2 GB) and builds in ~1 min.
 - Metadata reads (list_recent): UNION both tables, apply filters, drop hidden_ids/tombstones,
   order by ts DESC, limit.
-- Semantic search: embed query; per table `ORDER BY embedding <=> :q LIMIT :pool` with
-  `pool = max(top_k, 200)`; union candidates; hydrate; filter; drop hidden_ids/tombstones;
-  re-sort by distance; return top_k.
+- Semantic search: embed off the event loop; filter visible, non-conflicting records
+  in SQL before exact distance ranking and limits; merge and return top_k. Result
+  limits are strict integers from 1 to 1000. Daily summaries date-filter before aggregation.
 
 ---
 
@@ -389,15 +414,10 @@ Inverses: `uninstall-usage-instructions`, `uninstall-mcp-server`, `uninstall-enf
 `~/.hivemind`, and the local `hivemind:<version>` image). Uninstall NEVER touches the shared
 Drive folder — that is the team's memory, not local node state.
 
-The **guard hook must never call npx** — install a self-contained `~/.hivemind/guard.sh`:
-```sh
-#!/bin/sh
-[ "$HIVEMIND_GUARD_DISABLE" = "1" ] && exit 0
-URL="${HIVEMIND_MCP_URL:-http://localhost:7777/mcp}"
-curl -s -m 2 -o /dev/null "$URL" && exit 0
-echo "Hivemind MCP unreachable — run: npx -y @crash0v3rrid3/hivemind up (first boot ~60-90s)" >&2
-exit 1
-```
+The **guard hook must never call npx**. The self-contained guard checks `/healthz`
+for HTTP 200 plus `service: hivemind` and `status: ok`, then exits 0. Failures exit 2
+to block `UserPromptSubmit`; `HIVEMIND_GUARD_DISABLE=1` explicitly bypasses it.
+The hook command shell-quotes the absolute script path.
 Hook JSON merged (not overwritten) into ~/.claude/settings.json:
 `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"<abs>/.hivemind/guard.sh"}]}]}}`.
 MCP entry: `{"mcpServers":{"hivemind":{"type":"http","url":"http://localhost:<port>/mcp"}}}`.
@@ -453,7 +473,7 @@ tests that need Postgres are marked and SKIP automatically when it is unavailabl
 - `service`/`search`: two-table merge, pool over-fetch, hidden filtering, re-rank by distance,
   filter application — drive with a fake repository or fake hits so no DB is needed.
 - `loops`: export_once groups by day + writes immutable file + marks exported; import_once is
-  idempotent (ON CONFLICT), overwrites author from folder, filters roster, skips own folder,
+  idempotent (ON CONFLICT), overwrites author from folder, filters roster, restores own folder,
   tolerates partial files — drive against a tmp hive dir + a fake/real repo.
 - `mcp` tools: author always OWNER; author input rejected; filters plumb through.
 - INTEGRATION (marked `integration`, skip if no PG): repository CRUD, HNSW search, schema init.

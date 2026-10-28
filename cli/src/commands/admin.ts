@@ -19,13 +19,10 @@ const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 interface DriveFile {
   id: string;
   name: string;
+  appProperties?: { hivemindHandle?: string; hivemindMemberEmail?: string };
 }
 
-async function driveRequest<T>(
-  token: string,
-  url: string,
-  init: RequestInit,
-): Promise<T> {
+async function driveRequest<T>(token: string, url: string, init: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
     headers: {
@@ -41,22 +38,115 @@ async function driveRequest<T>(
   return (await res.json()) as T;
 }
 
-async function createFolder(token: string, name: string, parentId: string): Promise<DriveFile> {
+async function createFolder(
+  token: string,
+  name: string,
+  parentId: string,
+  email: string,
+): Promise<DriveFile> {
   return driveRequest<DriveFile>(token, `${DRIVE_FILES}?fields=id,name`, {
     method: 'POST',
-    body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: [parentId] }),
+    body: JSON.stringify({
+      name,
+      mimeType: FOLDER_MIME,
+      parents: [parentId],
+      appProperties: { hivemindHandle: name, hivemindMemberEmail: email.toLowerCase() },
+    }),
   });
 }
 
-async function shareFolder(token: string, fileId: string, email: string): Promise<void> {
+interface DrivePermission {
+  id: string;
+  type: string;
+  role: string;
+  emailAddress?: string;
+  permissionDetails?: { inherited?: boolean }[];
+}
+
+async function listAll<T>(token: string, url: URL, key: string): Promise<T[]> {
+  const items: T[] = [];
+  let nextPage: string | undefined;
+  do {
+    const page = await driveRequest<Record<string, unknown>>(token, url.toString(), {
+      method: 'GET',
+    });
+    items.push(...((page[key] as T[]) ?? []));
+    nextPage = page.nextPageToken as string | undefined;
+    if (nextPage) url.searchParams.set('pageToken', nextPage);
+  } while (nextPage);
+  return items;
+}
+
+/** Reuse a unique author folder and reconcile its writer permission on retries. */
+export async function provisionUser(
+  token: string,
+  parentId: string,
+  handle: string,
+  email: string,
+): Promise<DriveFile> {
+  validateHandle(handle);
+  if (!/^[A-Za-z0-9_-]+$/.test(parentId)) throw new Error('Invalid parent folder id');
+  const query = new URL(DRIVE_FILES);
+  query.searchParams.set(
+    'q',
+    `'${parentId}' in parents and name = '${handle}' and mimeType = '${FOLDER_MIME}' and trashed = false`,
+  );
+  query.searchParams.set('fields', 'nextPageToken,files(id,name,appProperties)');
+  const folders = await listAll<DriveFile>(token, query, 'files');
+  if (folders.length > 1)
+    throw new Error(
+      `Ambiguous author folder "${handle}": found ${folders.length}; resolve duplicates before provisioning`,
+    );
+  const folder = folders[0] ?? (await createFolder(token, handle, parentId, email));
+  const binding = folder.appProperties;
+  if (
+    (binding?.hivemindHandle && binding.hivemindHandle !== handle) ||
+    (binding?.hivemindMemberEmail && binding.hivemindMemberEmail !== email.toLowerCase())
+  ) {
+    throw new Error(
+      `Folder ${folder.id} is bound to another member; refuse to reassign author identity`,
+    );
+  }
+  const url = `${DRIVE_FILES}/${encodeURIComponent(folder.id)}/permissions`;
+  const permissionsUrl = new URL(url);
+  permissionsUrl.searchParams.set(
+    'fields',
+    'nextPageToken,permissions(id,type,role,emailAddress,permissionDetails)',
+  );
+  const permissions = await listAll<DrivePermission>(token, permissionsUrl, 'permissions');
+  const conflictingWriter = permissions.find(
+    (p) =>
+      ['writer', 'organizer', 'fileOrganizer'].includes(p.role) &&
+      (p.type !== 'user' || p.emailAddress?.toLowerCase() !== email.toLowerCase()),
+  );
+  if (conflictingWriter) {
+    if (conflictingWriter.permissionDetails?.some((detail) => detail.inherited)) {
+      throw new Error(
+        `Folder ${folder.id} inherits a different writer; remediate the parent folder ACL before provisioning`,
+      );
+    }
+    throw new Error(
+      `Folder ${folder.id} already has a different writer; resolve author ownership before provisioning`,
+    );
+  }
+  const permission = permissions.find(
+    (p) => p.type === 'user' && p.emailAddress?.toLowerCase() === email.toLowerCase(),
+  );
+  if (permission && ['writer', 'owner', 'organizer', 'fileOrganizer'].includes(permission.role))
+    return folder;
   await driveRequest<unknown>(
     token,
-    `${DRIVE_FILES}/${fileId}/permissions?sendNotificationEmail=true`,
+    permission
+      ? `${url}/${encodeURIComponent(permission.id)}`
+      : `${url}?sendNotificationEmail=true`,
     {
-      method: 'POST',
-      body: JSON.stringify({ type: 'user', role: 'writer', emailAddress: email }),
+      method: permission ? 'PATCH' : 'POST',
+      body: JSON.stringify(
+        permission ? { role: 'writer' } : { type: 'user', role: 'writer', emailAddress: email },
+      ),
     },
   );
+  return folder;
 }
 
 export function register(program: Command): void {
@@ -104,11 +194,8 @@ export function register(program: Command): void {
       }
 
       try {
-        console.log(`Creating folder "${handle}" under hive folder ${folderId}...`);
-        const folder = await createFolder(token, handle, folderId);
-        console.log(`Created folder id=${folder.id}`);
-        console.log(`Granting write access to ${email}...`);
-        await shareFolder(token, folder.id, email);
+        console.log(`Provisioning folder "${handle}" under hive folder ${folderId}...`);
+        const folder = await provisionUser(token, folderId, handle, email);
         console.log(`Provisioned ${handle} (${email}) -> folder ${folder.id}`);
         console.log(`Remember to add "${handle}" to the roster (conf or admin roster.json).`);
       } catch (err) {

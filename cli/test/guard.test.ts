@@ -47,9 +47,9 @@ describe('resolveGuardUrl', () => {
   });
 
   it('lets HIVEMIND_MCP_URL env win over the fallback', () => {
-    expect(
-      resolveGuardUrl({ HIVEMIND_MCP_URL: 'http://envhost:1/mcp' }, 'http://fb:2/mcp'),
-    ).toBe('http://envhost:1/mcp');
+    expect(resolveGuardUrl({ HIVEMIND_MCP_URL: 'http://envhost:1/mcp' }, 'http://fb:2/mcp')).toBe(
+      'http://envhost:1/mcp',
+    );
   });
 
   it('falls back to the default when fallback is explicitly undefined', () => {
@@ -72,12 +72,12 @@ describe('guardScriptContent', () => {
   });
 
   it('bakes the default url but lets HIVEMIND_MCP_URL override at runtime', () => {
-    expect(script).toContain(`\${HIVEMIND_MCP_URL:-${DEFAULT_MCP_URL}}`);
+    expect(script).toContain(`DEFAULT_URL='${DEFAULT_MCP_URL}'`);
   });
 
   it('probes with curl and a short timeout (never execs npx on the hot path)', () => {
-    expect(script).toContain('curl -s -m 2 -o /dev/null "$URL"');
-    expect(script).toMatch(/curl .* && exit 0/);
+    expect(script).toContain('curl -fsS -m 2');
+    expect(script).toContain('"hivemind"');
     // npx may only appear inside the echo suggestion message, never as a run command.
     for (const line of script.split('\n')) {
       const trimmed = line.trim();
@@ -88,13 +88,13 @@ describe('guardScriptContent', () => {
   });
 
   it('exits non-zero with a helpful message when unreachable', () => {
-    expect(script).toContain('exit 1');
+    expect(script).toContain('exit 2');
     expect(script).toContain('Hivemind MCP unreachable');
   });
 
   it('parameterises the baked-in default url', () => {
     const custom = guardScriptContent('http://localhost:9099/mcp');
-    expect(custom).toContain('${HIVEMIND_MCP_URL:-http://localhost:9099/mcp}');
+    expect(custom).toContain("DEFAULT_URL='http://localhost:9099/mcp'");
   });
 });
 
@@ -123,9 +123,7 @@ describe('installGuardScript', () => {
     cleanups.push(restore);
 
     const p = installGuardScript('http://localhost:8500/mcp');
-    expect(readFileSync(p, 'utf8')).toContain(
-      '${HIVEMIND_MCP_URL:-http://localhost:8500/mcp}',
-    );
+    expect(readFileSync(p, 'utf8')).toContain("DEFAULT_URL='http://localhost:8500/mcp'");
   });
 });
 
@@ -153,7 +151,7 @@ describe('runGuard', () => {
 
   it('returns 1 when the MCP endpoint is unreachable', async () => {
     const code = await runGuard({ HIVEMIND_MCP_URL: UNREACHABLE_URL });
-    expect(code).toBe(1);
+    expect(code).toBe(2);
   });
 
   it('does not bypass for HIVEMIND_GUARD_DISABLE values other than "1"', async () => {
@@ -161,18 +159,18 @@ describe('runGuard', () => {
       HIVEMIND_GUARD_DISABLE: '0',
       HIVEMIND_MCP_URL: UNREACHABLE_URL,
     });
-    expect(code).toBe(1);
+    expect(code).toBe(2);
   });
 
   it('probes the fallback url (e.g. the configured port) when HIVEMIND_MCP_URL is unset', async () => {
     // Regression: the guard subcommand must honor the conf-derived port, not the
     // built-in default. An unreachable fallback must yield exit 1.
     const code = await runGuard({}, UNREACHABLE_URL);
-    expect(code).toBe(1);
+    expect(code).toBe(2);
   });
 
   it('lets HIVEMIND_MCP_URL env win over the provided fallback', async () => {
     const code = await runGuard({ HIVEMIND_MCP_URL: UNREACHABLE_URL }, 'http://localhost:1/mcp');
-    expect(code).toBe(1);
+    expect(code).toBe(2);
   });
 });

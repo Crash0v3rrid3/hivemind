@@ -10,7 +10,7 @@ Provides:
 * A controllable clock and an ``EventRecord`` factory.
 * A temporary hive-directory fixture for the export/import loops.
 * Integration fixtures that SKIP automatically when ``DATABASE_URL_TEST`` is
-  unset or Postgres is unreachable.
+  unset. A configured database must pass initialization.
 """
 
 from __future__ import annotations
@@ -25,7 +25,9 @@ import pytest
 
 from hivemind_app.config import Identity
 from hivemind_app.embeddings import FakeEmbedder
+from hivemind_app.schemas import SearchFilters
 from hivemind_app.serialization import EventRecord
+from hivemind_app.service import matches_filters
 
 # Small dimension keeps unit tests fast; the real schema uses 384 but nothing in
 # the unit layer touches the DB, so the dimension is arbitrary here.
@@ -159,8 +161,15 @@ class FakeRepository:
     async def list_ingested_files(self) -> set[str]:
         return set(self.ingested_paths)
 
-    async def import_file(self, records: list[EventRecord], path: str) -> int:
-        inserted = await self.import_records(records)
+    async def import_file(self, records: list[EventRecord], path: str, *, own: bool = False) -> int:
+        if own:
+            existing = {r.id for r in self.local}
+            restored = [r for r in records if r.id not in existing]
+            self.local.extend(restored)
+            self.exported_ids.update(r.id for r in restored)
+            inserted = len(restored)
+        else:
+            inserted = await self.import_records(records)
         self.ingested_paths.add(path)
         return inserted
 
@@ -199,11 +208,27 @@ class FakeRepository:
         rows.sort(key=lambda r: r.ts, reverse=True)
         return rows[:pool]
 
-    async def recent_candidates(self, pool: int) -> list[EventRecord]:
+    async def recent_candidates(
+        self,
+        pool: int | None,
+        *,
+        filters: SearchFilters | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[EventRecord]:
         self.last_recent_pool = pool
-        merged = self._recent_one(self.local, pool) + self._recent_one(self.team, pool)
+        hidden = await self.hidden_ids()
+        merged = [
+            r
+            for r in (*self.local, *self.team)
+            if r.id not in hidden
+            and r.event_type != "tombstone"
+            and matches_filters(r, filters)
+            and (since is None or r.ts >= since)
+            and (until is None or r.ts < until)
+        ]
         merged.sort(key=lambda r: r.ts, reverse=True)
-        return merged[:pool]
+        return merged if pool is None else merged[:pool]
 
     def _nearest_one(
         self, table: list[EventRecord], query_vec: list[float], pool: int
@@ -215,16 +240,15 @@ class FakeRepository:
         return scored[:pool]
 
     async def nearest_candidates(
-        self, query_vec: list[float], pool: int
+        self, query_vec: list[float], pool: int, *, filters: SearchFilters | None = None
     ) -> list[tuple[EventRecord, float]]:
         self.last_nearest_pool = pool
         if self.nearest_override is not None:
             return list(self.nearest_override)
-        # Concatenate per-table pools WITHOUT global re-ranking (the service
-        # dedupes + re-ranks), exactly like the SQL repository.
-        return self._nearest_one(self.local, query_vec, pool) + self._nearest_one(
-            self.team, query_vec, pool
-        )
+        rows = await self.recent_candidates(None, filters=filters)
+        scored = [(r, 1.0 - _dot(query_vec, r.embedding)) for r in rows]
+        scored.sort(key=lambda h: h[1])
+        return scored[:pool]
 
     async def history_chain(self, event_id: uuid.UUID) -> list[EventRecord]:
         by_id: dict[uuid.UUID, EventRecord] = {}
@@ -273,11 +297,12 @@ def fake_repo() -> FakeRepository:
 def hive_root(tmp_path: Path) -> Path:
     root = tmp_path / "hive"
     root.mkdir()
+    (root / "alice").mkdir()
     return root
 
 
 # ---------------------------------------------------------------------------
-# Integration fixtures (skip when Postgres is unavailable).
+# Integration fixtures (skip only when no test database is configured).
 # ---------------------------------------------------------------------------
 
 
@@ -297,7 +322,7 @@ def database_url_test() -> str:
 async def pg_engine(database_url_test: str) -> AsyncIterator[object]:
     """Yield a live async engine with an initialised, clean schema.
 
-    Skips gracefully if the database cannot be reached. Truncates the three
+    A configured database is required to initialize successfully. Truncates the
     tables before yielding so each test starts from a known-empty state.
     """
     from sqlalchemy import text
@@ -307,14 +332,15 @@ async def pg_engine(database_url_test: str) -> AsyncIterator[object]:
 
     engine = create_engine(database_url_test)
     try:
-        try:
-            await init_schema(engine)
-        except Exception as exc:  # pragma: no cover - environment dependent
-            await engine.dispose()
-            pytest.skip(f"Postgres unreachable for integration test: {exc}")
+        await init_schema(engine)
 
         async with engine.begin() as conn:
-            await conn.execute(text("TRUNCATE local_events, team_events, ingested_files"))
+            await conn.execute(
+                text(
+                    "TRUNCATE local_events, team_events, ingested_files, "
+                    "state_binding, conflicted_events"
+                )
+            )
         yield engine
     finally:
         await engine.dispose()

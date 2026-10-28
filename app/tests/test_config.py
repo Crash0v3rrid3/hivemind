@@ -129,7 +129,7 @@ def test_settings_environment_overrides_win() -> None:
         "HIVEMIND_PATH": "/custom/mount",
         "DATABASE_URL": "postgresql+asyncpg://u:p@db:5432/x",
         "EMBEDDING_MODEL": "some/model",
-        "EMBEDDING_DIM": "16",
+        "EMBEDDING_DIM": "384",
         "EXPORT_INTERVAL_SEC": "5",
         "IMPORT_INTERVAL_SEC": "7",
         "MCP_HOST": "127.0.0.1",
@@ -141,7 +141,7 @@ def test_settings_environment_overrides_win() -> None:
     assert s.hivemind_path == "/custom/mount"
     assert s.database_url == "postgresql+asyncpg://u:p@db:5432/x"
     assert s.embedding_model == "some/model"
-    assert s.embedding_dim == 16
+    assert s.embedding_dim == 384
     assert s.export_interval_sec == 5
     assert s.import_interval_sec == 7
     assert s.mcp_host == "127.0.0.1"

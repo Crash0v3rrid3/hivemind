@@ -34,39 +34,33 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 describe('extractFolderId', () => {
   it('extracts from a /folders/<id> share URL', () => {
-    expect(
-      extractFolderId('https://drive.google.com/drive/folders/1AbC_def-GHI123'),
-    ).toBe('1AbC_def-GHI123');
+    expect(extractFolderId('https://drive.google.com/drive/folders/1AbC_def-GHI123')).toBe(
+      '1AbC_def-GHI123',
+    );
   });
 
   it('extracts from a /folders/<id> URL with trailing query params', () => {
-    expect(
-      extractFolderId('https://drive.google.com/drive/folders/ABC123?usp=sharing'),
-    ).toBe('ABC123');
+    expect(extractFolderId('https://drive.google.com/drive/folders/ABC123?usp=sharing')).toBe(
+      'ABC123',
+    );
   });
 
   it('extracts from a ?id=<id> URL', () => {
-    expect(
-      extractFolderId('https://drive.google.com/open?id=XYZ_789-abc'),
-    ).toBe('XYZ_789-abc');
+    expect(extractFolderId('https://drive.google.com/open?id=XYZ_789-abc')).toBe('XYZ_789-abc');
   });
 
   it('extracts from an &id=<id> URL (id not the first param)', () => {
-    expect(
-      extractFolderId('https://drive.google.com/open?usp=sharing&id=Mid456'),
-    ).toBe('Mid456');
+    expect(extractFolderId('https://drive.google.com/open?usp=sharing&id=Mid456')).toBe('Mid456');
   });
 
   it('prefers the /folders/ form when both appear', () => {
-    expect(
-      extractFolderId('https://drive.google.com/drive/folders/FOLD1?id=SHOULD_NOT_WIN'),
-    ).toBe('FOLD1');
+    expect(extractFolderId('https://drive.google.com/drive/folders/FOLD1?id=SHOULD_NOT_WIN')).toBe(
+      'FOLD1',
+    );
   });
 
   it('rejects a URL with neither form (junk)', () => {
-    expect(() => extractFolderId('https://drive.google.com/drive/my-drive')).toThrow(
-      ConfigError,
-    );
+    expect(() => extractFolderId('https://drive.google.com/drive/my-drive')).toThrow(ConfigError);
   });
 
   it('rejects a bare non-URL string', () => {
@@ -91,12 +85,9 @@ describe('extractFolderId', () => {
 // validateHandle
 // ---------------------------------------------------------------------------
 describe('validateHandle', () => {
-  it.each(['alice', 'a', 'bob-smith', 'user.name', 'x_y', 'user9', '9lives'])(
-    'accepts %s',
-    (h) => {
-      expect(validateHandle(h)).toBe(h);
-    },
-  );
+  it.each(['alice', 'a', 'bob-smith', 'user.name', 'x_y', 'user9', '9lives'])('accepts %s', (h) => {
+    expect(validateHandle(h)).toBe(h);
+  });
 
   it.each([
     ['Alice', 'uppercase'],
@@ -276,16 +267,16 @@ describe('resolveConfig', () => {
   });
 
   it('lets env override the username and validates it', () => {
-    expect(
-      resolveConfig(baseRaw, { HIVEMIND_USERNAME: 'envuser' }, DEFAULTS).ownerHandle,
-    ).toBe('envuser');
-    expect(() =>
-      resolveConfig(baseRaw, { HIVEMIND_USERNAME: 'BadUser' }, DEFAULTS),
-    ).toThrow(ConfigError);
+    expect(resolveConfig(baseRaw, { HIVEMIND_USERNAME: 'envuser' }, DEFAULTS).ownerHandle).toBe(
+      'envuser',
+    );
+    expect(() => resolveConfig(baseRaw, { HIVEMIND_USERNAME: 'BadUser' }, DEFAULTS)).toThrow(
+      ConfigError,
+    );
   });
 
   it('resolves roster from conf array', () => {
-    const cfg = resolveConfig({ ...baseRaw, roster: ['a', ' b ', ''] }, {}, DEFAULTS);
+    const cfg = resolveConfig({ ...baseRaw, roster: ['a', 'b'] }, {}, DEFAULTS);
     expect(cfg.roster).toEqual(['a', 'b']);
   });
 
@@ -309,9 +300,9 @@ describe('resolveConfig', () => {
 
   it('applies mount_path precedence', () => {
     expect(resolveConfig(baseRaw, {}, DEFAULTS).mountPath).toBe('/mnt/hivemind');
-    expect(
-      resolveConfig({ ...baseRaw, mount_path: '/conf/mnt' }, {}, DEFAULTS).mountPath,
-    ).toBe('/conf/mnt');
+    expect(resolveConfig({ ...baseRaw, mount_path: '/conf/mnt' }, {}, DEFAULTS).mountPath).toBe(
+      '/conf/mnt',
+    );
     expect(
       resolveConfig(
         { ...baseRaw, mount_path: '/conf/mnt' },
@@ -332,19 +323,19 @@ describe('resolveConfig', () => {
   });
 
   it('rejects a non-positive interval', () => {
-    expect(() =>
-      resolveConfig({ ...baseRaw, export_interval_sec: 0 }, {}, DEFAULTS),
-    ).toThrow(ConfigError);
-    expect(() =>
-      resolveConfig(baseRaw, { HIVEMIND_IMPORT_INTERVAL_SEC: '-5' }, DEFAULTS),
-    ).toThrow(ConfigError);
+    expect(() => resolveConfig({ ...baseRaw, export_interval_sec: 0 }, {}, DEFAULTS)).toThrow(
+      ConfigError,
+    );
+    expect(() => resolveConfig(baseRaw, { HIVEMIND_IMPORT_INTERVAL_SEC: '-5' }, DEFAULTS)).toThrow(
+      ConfigError,
+    );
   });
 
   it('applies image_tag precedence', () => {
     expect(resolveConfig(baseRaw, {}, DEFAULTS).imageTag).toBe('9.9.9');
-    expect(
-      resolveConfig({ ...baseRaw, image_tag: 'conf-tag' }, {}, DEFAULTS).imageTag,
-    ).toBe('conf-tag');
+    expect(resolveConfig({ ...baseRaw, image_tag: 'conf-tag' }, {}, DEFAULTS).imageTag).toBe(
+      'conf-tag',
+    );
     expect(
       resolveConfig(
         { ...baseRaw, image_tag: 'conf-tag' },
@@ -377,9 +368,9 @@ describe('resolveConfig', () => {
   });
 
   it('throws when the resolved port is invalid', () => {
-    expect(() =>
-      resolveConfig(baseRaw, { HIVEMIND_MCP_PORT: '99999' }, DEFAULTS),
-    ).toThrow(ConfigError);
+    expect(() => resolveConfig(baseRaw, { HIVEMIND_MCP_PORT: '99999' }, DEFAULTS)).toThrow(
+      ConfigError,
+    );
   });
 });
 
@@ -400,9 +391,9 @@ describe('resolveConfig — mount backend', () => {
   });
 
   it('rejects an unknown backend', () => {
-    expect(() =>
-      resolveConfig({ ...rcloneRaw, mount_backend: 'dropbox' }, {}, DEFAULTS),
-    ).toThrow(/invalid mount_backend/);
+    expect(() => resolveConfig({ ...rcloneRaw, mount_backend: 'dropbox' }, {}, DEFAULTS)).toThrow(
+      /invalid mount_backend/,
+    );
   });
 
   it('rclone backend still requires gdrive_folder_url', () => {

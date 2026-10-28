@@ -15,13 +15,14 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
 import structlog
 
-from .config import Identity
+from .config import Identity, resolve_roster, validate_handle
 from .serialization import (
     EventRecord,
     atomic_write_text,
@@ -51,7 +52,9 @@ class ImportRepository(RepositoryLike, Protocol):  # pragma: no cover - typing a
 
     async def list_ingested_files(self) -> set[str]: ...
 
-    async def import_file(self, records: list[EventRecord], path: str) -> int: ...
+    async def import_file(
+        self, records: list[EventRecord], path: str, *, own: bool = False
+    ) -> int: ...
 
     async def is_file_ingested(self, path: str) -> bool: ...
 
@@ -85,6 +88,14 @@ async def export_once(
     if not records:
         return []
 
+    root = Path(hive_root)
+    validate_handle(owner_handle)
+    if not await asyncio.to_thread(root.is_dir) or not await asyncio.to_thread(
+        (root / owner_handle).is_dir
+    ):
+        raise OSError("hive and provisioned owner folder must exist before export")
+    if any(r.author != owner_handle for r in records):
+        raise ValueError("refusing export under a different owner identity")
     now = _now(clock)
     epoch_ms = int(now.timestamp() * 1000)
 
@@ -98,7 +109,7 @@ async def export_once(
         directory = day_dir(hive_root, owner_handle, day)
         filename = batch_filename(epoch_ms, uuid_factory())
         path = directory / filename
-        atomic_write_text(path, serialize_records(group))
+        await asyncio.to_thread(_publish, root, owner_handle, path, group)
         written.append(str(path))
         log.info(
             "hivemind.export.file",
@@ -116,18 +127,28 @@ async def export_once(
 # ---------------------------------------------------------------------------
 
 
+def _publish(root: Path, owner: str, path: Path, records: list[EventRecord]) -> None:
+    if not root.is_dir() or not (root / owner).is_dir():
+        raise OSError("hive unavailable; export remains pending")
+    # Create only the day folder: never recreate a vanished mount or owner folder.
+    path.parent.mkdir(exist_ok=True)
+    atomic_write_text(path, serialize_records(records), create_parents=False)
+
+
 def _member_folders(hive_root: Path, identity: Identity) -> list[Path]:
     """Immediate subfolders of the hive that are importable members."""
     if not hive_root.is_dir():
         return []
     folders: list[Path] = []
     for child in sorted(hive_root.iterdir()):
-        if not child.is_dir():
+        if child.is_symlink() or not child.is_dir():
             continue
         name = child.name
-        if name == identity.owner_handle:
-            continue  # never import our own folder
-        if not identity.is_member(name):
+        try:
+            validate_handle(name)
+        except ValueError:
+            continue
+        if name != identity.owner_handle and not identity.is_member(name):
             continue  # roster-validated; ignore unknown folders
         folders.append(child)
     return folders
@@ -135,7 +156,14 @@ def _member_folders(hive_root: Path, identity: Identity) -> list[Path]:
 
 def _ndjson_files(folder: Path) -> list[Path]:
     """All published NDJSON files under a member folder (recursively)."""
-    return sorted(p for p in folder.rglob("*.ndjson") if p.is_file() and is_ndjson_file(p.name))
+    return sorted(
+        p
+        for p in folder.rglob("*.ndjson")
+        if p.is_file()
+        and not p.is_symlink()
+        and p.resolve().is_relative_to(folder.resolve())
+        and is_ndjson_file(p.name)
+    )
 
 
 async def import_once(
@@ -143,12 +171,13 @@ async def import_once(
     identity: Identity,
     hive_root: str | Path,
 ) -> int:
-    """Import new NDJSON files from other members' folders into team_events.
+    """Import peer files and recover the owner's published local history.
 
-    Returns the number of records newly inserted (ON CONFLICT DO NOTHING).
+    Returns the number of records newly inserted. Partial or failed files retry.
     Idempotent: already-ingested files are skipped; re-running inserts nothing.
     """
     root = Path(hive_root)
+    identity = await asyncio.to_thread(resolve_roster, identity, root)
     inserted_total = 0
 
     # Fetch the whole ingested set ONCE per cycle instead of a DB point lookup
@@ -156,22 +185,27 @@ async def import_once(
     # needs no filesystem read and no query.
     ingested = await repo.list_ingested_files()
 
-    for folder in _member_folders(root, identity):
+    for folder in await asyncio.to_thread(_member_folders, root, identity):
         author = folder.name
-        for file_path in _ndjson_files(folder):
+        try:
+            files = await asyncio.to_thread(_ndjson_files, folder)
+        except OSError as exc:
+            log.warning("hivemind.import.folder_error", path=str(folder), error=str(exc))
+            continue
+        for file_path in files:
             rel = file_path.relative_to(root).as_posix()
             if rel in ingested:
                 continue  # already ingested -> skip without any IO
             # Defensive: derive author from the folder, ignore the file's field.
             assert author_from_path(rel) == author
             try:
-                text = file_path.read_text(encoding="utf-8")
-            except OSError as exc:  # pragma: no cover - filesystem race
+                text = await asyncio.to_thread(file_path.read_text, encoding="utf-8")
+            except (OSError, UnicodeError) as exc:  # pragma: no cover - filesystem race
                 log.warning("hivemind.import.read_error", path=rel, error=str(exc))
                 continue  # transient; retried next cycle (not marked)
 
             try:
-                records = parse_ndjson(text)
+                records = await asyncio.to_thread(parse_ndjson, text, require_complete=True)
             except Exception as exc:
                 log.warning("hivemind.import.parse_error", path=rel, error=str(exc))
                 continue  # retried next cycle (not marked)
@@ -179,7 +213,11 @@ async def import_once(
             # Stamp the authoritative author from the read-only folder, then insert
             # records + mark the file ingested in a SINGLE transaction.
             stamped = [_with_author(r, author) for r in records]
-            inserted = await repo.import_file(stamped, rel)
+            try:
+                inserted = await repo.import_file(stamped, rel, own=author == identity.owner_handle)
+            except Exception as exc:
+                log.warning("hivemind.import.persistence_error", path=rel, error=str(exc))
+                continue
             ingested.add(rel)
             inserted_total += inserted
             log.info(
@@ -194,23 +232,7 @@ async def import_once(
 
 def _with_author(record: EventRecord, author: str) -> EventRecord:
     """Return a copy of ``record`` with ``author`` overridden."""
-    return EventRecord(
-        id=record.id,
-        author=author,
-        event_type=record.event_type,
-        status=record.status,
-        title=record.title,
-        body=record.body,
-        jira_project=record.jira_project,
-        jira_ticket=record.jira_ticket,
-        tags=list(record.tags),
-        metadata=dict(record.metadata),
-        supersedes=record.supersedes,
-        deletes=record.deletes,
-        ts=record.ts,
-        created_at=record.created_at,
-        embedding=list(record.embedding),
-    )
+    return replace(record, author=author)
 
 
 # ---------------------------------------------------------------------------

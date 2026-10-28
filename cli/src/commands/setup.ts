@@ -7,7 +7,7 @@
  *   5. best-effort ACL verification (full checks run in `doctor`)
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Command } from 'commander';
 import { ConfigError, hostHivePath, loadResolvedConfig, type ResolvedConfig } from '../config.js';
@@ -37,14 +37,18 @@ function rcloneAvailable(): boolean {
  * ~/.hivemind/rclone.conf via RCLONE_CONFIG. Uses headless OAuth. Returns true if
  * rclone wrote the remote (so generate should not overwrite it).
  */
-function configureRclone(cfg: ResolvedConfig): boolean {
+export function configureRclone(cfg: ResolvedConfig): boolean {
   if (!rcloneAvailable()) {
     console.warn(
-      'rclone not found on PATH — writing a placeholder rclone.conf.\n' +
+      'rclone not found on PATH — preserving any existing rclone.conf.\n' +
         '  Install rclone and re-run `hivemind setup`, or complete the OAuth token manually.',
     );
     return false;
   }
+  mkdirSync(path.dirname(rcloneConfPath()), { recursive: true });
+  const tempDir = mkdtempSync(path.join(path.dirname(rcloneConfPath()), '.rclone-'));
+  const tempConfig = path.join(tempDir, 'rclone.conf');
+  if (existsSync(rcloneConfPath())) copyFileSync(rcloneConfPath(), tempConfig);
   const args = [
     'config',
     'create',
@@ -56,11 +60,17 @@ function configureRclone(cfg: ResolvedConfig): boolean {
   console.log('Configuring rclone Drive remote (a browser window may open for OAuth)...');
   const res = spawnSync('rclone', args, {
     stdio: 'inherit',
-    env: { ...process.env, RCLONE_CONFIG: rcloneConfPath() },
+    env: { ...process.env, RCLONE_CONFIG: tempConfig },
   });
   if (res.error || (res.status ?? 1) !== 0) {
-    console.warn('rclone config did not complete cleanly — writing a placeholder rclone.conf.');
+    rmSync(tempDir, { recursive: true, force: true });
+    console.warn('rclone config did not complete cleanly — existing configuration preserved.');
     return false;
+  }
+  try {
+    renameSync(tempConfig, rcloneConfPath());
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
   }
   return true;
 }
@@ -140,7 +150,7 @@ function runSetupNix(cfg: ResolvedConfig): number {
   const staged = stageApp();
   if (staged !== 0) return staged;
   console.log('Pre-building the Nix stack (fetches postgres + app closure once)...');
-  if (nixBuildUp() !== 0) {
+  if (nixBuildUp(cfg) !== 0) {
     console.warn('nix build did not complete cleanly; `hivemind up` will retry it.');
   }
   verifyAcls(cfg);
@@ -178,8 +188,15 @@ export function runSetup(): number {
 
   console.log(`Drive folder id: ${cfg.folderId}`);
   ensureMountPath(cfg);
+  const hadRclone = existsSync(rcloneConfPath());
   const rcloneWritten = configureRclone(cfg);
-  const paths = writeGeneratedFiles(cfg, { skipRclone: rcloneWritten });
+  if (!rcloneWritten && hadRclone) {
+    console.error('setup: authentication did not complete; existing configuration retained.');
+    return 1;
+  }
+  const paths = writeGeneratedFiles(cfg, {
+    skipRclone: rcloneWritten || existsSync(rcloneConfPath()),
+  });
 
   console.log(`Wrote ${paths.env}`);
   console.log(`Wrote ${paths.compose}`);

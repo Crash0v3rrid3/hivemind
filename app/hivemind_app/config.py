@@ -11,10 +11,12 @@ real embedding model is never loaded here.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Enumerations (kept as frozensets for cheap membership tests).
@@ -172,6 +174,7 @@ class Settings:
     import_interval_sec: int
     mcp_host: str
     mcp_port: int
+    hive_id: str = ""
 
     def __post_init__(self) -> None:
         validate_handle(self.owner_handle)
@@ -180,8 +183,11 @@ class Settings:
         _validate_port(self.mcp_port)
         _validate_interval("export_interval_sec", self.export_interval_sec)
         _validate_interval("import_interval_sec", self.import_interval_sec)
-        if self.embedding_dim <= 0:
-            raise ConfigError(f"invalid embedding_dim {self.embedding_dim!r}: must be > 0")
+        if self.embedding_dim != DEFAULT_EMBEDDING_DIM:
+            raise ConfigError(
+                f"invalid embedding_dim {self.embedding_dim!r}: "
+                f"must equal schema dimension {DEFAULT_EMBEDDING_DIM}"
+            )
 
     @property
     def identity(self) -> Identity:
@@ -204,6 +210,9 @@ class Settings:
         roster = _parse_roster(roster_raw) if roster_raw else ()
 
         return cls(
+            hive_id=e.get(
+                "HIVEMIND_ID", str(Path(e.get("HIVEMIND_PATH", DEFAULT_HIVEMIND_PATH)).resolve())
+            ),
             owner_handle=validate_handle(owner),
             roster=roster,
             hivemind_path=e.get("HIVEMIND_PATH", DEFAULT_HIVEMIND_PATH),
@@ -225,3 +234,19 @@ def _env_int(env: Mapping[str, str], key: str, default: int) -> int:
         return int(raw)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"invalid integer for {key}: {raw!r}") from exc
+
+
+def resolve_roster(identity: Identity, root: Path) -> Identity:
+    """Explicit roster wins; otherwise use the administrator roster when present.
+
+    An invalid roster fails closed. In its absence valid folder handles are accepted.
+    """
+    if identity.roster:
+        return identity
+    path = root / "roster.json"
+    if not path.exists():
+        return identity
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list) or not data:
+        raise ConfigError("roster.json must be a nonempty array of handles")
+    return Identity(identity.owner_handle, tuple(validate_handle(h) for h in data))

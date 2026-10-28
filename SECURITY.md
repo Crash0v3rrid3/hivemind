@@ -12,6 +12,10 @@ Expect an initial acknowledgement within a few days.
 Hivemind is serverless and runs entirely on developer machines; there is no
 central service to attack. A few properties are load-bearing and worth stating:
 
+- **The MCP endpoint is local and unauthenticated.** Generated Docker ports bind
+  to `127.0.0.1`, and the native runtime listens on loopback. Local processes can
+  act as the configured owner. Do not publish this endpoint to a network or put
+  it behind an unauthenticated proxy.
 - **Authorship is derived from the filesystem, never from the payload.** A record
   is attributed to the owner of the Drive folder it sits in. The local write path
   rejects any attempt to set `author` (including inside `metadata`), and imported

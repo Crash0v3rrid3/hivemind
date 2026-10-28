@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appFlakeRef,
   effectiveBackend,
@@ -6,6 +8,8 @@ import {
   nixSocketPath,
   nixStateDir,
   nixUpEnv,
+  nixUpAttr,
+  waitHealthy,
 } from '../src/nix.js';
 import { ConfigError, resolveDeployBackend, type ResolvedConfig } from '../src/config.js';
 
@@ -85,5 +89,39 @@ describe('effectiveBackend', () => {
       expect(r.backend).toBe('nix');
       expect(r.note).toBeUndefined();
     }
+  });
+});
+
+
+describe('Nix startup isolation', () => {
+  it('selects a distinct closure for fake and real embedding modes', () => {
+    expect(nixUpAttr(cfg({ embeddings: false }))).toBe('up-fake');
+    expect(nixUpAttr(cfg({ embeddings: true }))).toBe('up-real');
+  });
+
+  it('keeps an empty roster empty through the generated shell assignment', () => {
+    const flake = readFileSync(new URL('../../app/flake.nix', import.meta.url), 'utf8');
+    const assignment = flake.split('\n').find(line => line.includes('export ROSTER='))!.trim().replaceAll("''${", '${');
+    const result = spawnSync('bash', ['-c', assignment + '; printf "%s" "$ROSTER"'], {
+      env: { ...process.env, OWNER: 'alice', ...nixUpEnv(cfg({ roster: [] })) }, encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+  });
+});
+
+
+describe('Nix readiness', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+  it('rejects unrelated successful HTTP responses', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"status":"ok"}')));
+    const ready = waitHealthy(7777, 1);
+    await vi.runAllTimersAsync();
+    expect(await ready).toBe(false);
+  });
+  it('accepts an identified Hivemind health response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"service":"hivemind","status":"ok"}')));
+    expect(await waitHealthy(7777, 1)).toBe(true);
   });
 });

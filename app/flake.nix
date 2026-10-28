@@ -2,13 +2,47 @@
   description = "Hivemind — serverless shared team memory over MCP (app + local runtime)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  # 26.11 no longer supports Intel macOS; keep it on the supported Darwin branch.
+  inputs.nixpkgs-intel.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, nixpkgs-intel }:
     let
       # macOS only (Intel + Apple Silicon). Hivemind nodes are developer laptops.
       systems = [ "aarch64-darwin" "x86_64-darwin" ];
       forAllSystems =
-        f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
+        f: nixpkgs.lib.genAttrs systems (system:
+          f (import (if system == "x86_64-darwin" then nixpkgs-intel else nixpkgs) {
+            inherit system;
+            overlays = nixpkgs.lib.optional (system == "x86_64-darwin") (final: prev: {
+              pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [ (_: pythonPrev: {
+                # Backport the pgvector test-hook availability guard from our pinned
+                # unstable input (pkgs/development/python-modules/pgvector/default.nix).
+                # Its database test hook is Linux-only; imports remain checked.
+                pgvector = pythonPrev.pgvector.overridePythonAttrs (_: {
+                  doCheck = final.lib.meta.availableOn final.stdenv.buildPlatform final.postgresqlTestHook;
+                });
+                # The 26.05 binding's dynamic version falls back to 0.0.0 without
+                # Git metadata. Match the actual sqlite-vec source/library version,
+                # as the newer nixpkgs pyprojectVersionPatchHook does upstream.
+                sqlite-vec = pythonPrev.sqlite-vec.overridePythonAttrs (old: {
+                  postPatch = old.postPatch + ''
+                    substituteInPlace pyproject.toml \
+                      --replace-fail 'dynamic = ["version"]' 'version = "${old.version}"'
+                  '';
+                });
+                # datasets is used only by TestTrainFromIterators, already disabled
+                # upstream for network access. Avoid its broken Intel Arrow closure
+                # without disabling any additional tests or import checks.
+                tokenizers = pythonPrev.tokenizers.overridePythonAttrs (old: {
+                  nativeCheckInputs = final.lib.filter (dep: (dep.pname or "") != "datasets") old.nativeCheckInputs;
+                  postPatch = (old.postPatch or "") + ''
+                    substituteInPlace tests/documentation/test_tutorial_train_from_iterators.py \
+                      --replace-fail $'\nimport datasets\n' $'\n'
+                  '';
+                });
+              }) ];
+            });
+          }));
 
       # Runtime closure, all from nixpkgs (nothing hand-packaged — fastembed/onnx
       # substitute from the binary cache on darwin).
@@ -97,7 +131,7 @@ processes:
       failure_threshold: 60
 '';
 
-      mkRuntime = pkgs:
+      mkRuntime = pkgs: { withEmbeddings ? false }:
         let
           pg = pkgs.postgresql.withPackages (p: [ p.pgvector ]);
           curl = pkgs.curl;
@@ -111,21 +145,35 @@ processes:
             nativeBuildInputs = [ modelPy ];
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
-            outputHash = "sha256-H4YTiwY2O3ECxWH8ZNtpWmqiSLUK1J4ONCSP5kpR+Fc=";
+            # Both pins fetch snapshot aa8f8b060edb00e03bfdd08813a2949946c8ba55:
+            # model_optimized.onnx SHA256 51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431.
+            # Hub 1.30 (ARM) adds trees/<commit>.json; Hub 1.16 (Intel) does not.
+            # Model/tokenizer bytes are identical; pin each dependency's cache layout.
+            outputHash = if pkgs.stdenv.hostPlatform.system == "x86_64-darwin"
+              then "sha256-ka/fJG9wtaxxuaeGziIWG/Ssw63WY0WkArkvyLaf6Vo="
+              else "sha256-cQ3VocLQKAE35eVduQkVPDcoK1eFtppaNabXoI4jr3A=";
             SSL_CERT_FILE = cacertBundle;
           } ''
             export HOME="$TMPDIR"
             export FASTEMBED_CACHE_PATH="$out"
             mkdir -p "$out"
             python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+            # FastEmbed writes this JSON in filesystem traversal order. Canonicalize
+            # only its bookkeeping so cache hashes do not depend on directory order.
+            python - <<'PYTHON'
+            import json
+            import os
+            from pathlib import Path
+            metadata = Path(os.environ["FASTEMBED_CACHE_PATH"]) / "models--qdrant--bge-small-en-v1.5-onnx-q" / "files_metadata.json"
+            metadata.write_text(json.dumps(json.loads(metadata.read_text()), sort_keys=True, separators=(",", ":")))
+            PYTHON
             rm -rf "$out/.locks" || true
             find "$out" -name '*.lock' -delete 2>/dev/null || true
           '';
           binPath = pkgs.lib.makeBinPath [ pg pkgs.process-compose pkgs.devenv pkgs.coreutils curl ];
           cfg = mkComposeFile pkgs;
           cfgSqlite = mkComposeFileSqlite pkgs;
-          appFake = mkApp pkgs { withEmbeddings = false; };
-          appReal = mkApp pkgs { withEmbeddings = true; };
+          app = mkApp pkgs { inherit withEmbeddings; };
 
           # devenv FALLBACK supervisor: mirrors the same three processes via
           # devenv.processes (devenv runs them through its own process-compose, so
@@ -161,7 +209,7 @@ processes:
           devenvYaml = pkgs.writeText "devenv.yaml" ''
 inputs:
   nixpkgs:
-    url: github:NixOS/nixpkgs/nixpkgs-unstable
+    url: path:${pkgs.path}
 '';
           devenvProject = pkgs.runCommand "hivemind-devenv-project" { } ''
             mkdir -p $out
@@ -222,7 +270,7 @@ inputs:
             HIVE_DIR="''${HIVEMIND_HIVE:-$STATE_DIR/hive}"
             OWNER="''${OWNER_HANDLE:-localdev}"
             export OWNER_HANDLE="$OWNER"
-            export ROSTER="''${ROSTER:-$OWNER}"
+            export ROSTER="''${ROSTER-}"
             export HIVEMIND_PATH="$HIVE_DIR"
             if [ "$PERSISTENCE" = "sqlite" ]; then
               export DATABASE_URL="sqlite+aiosqlite:///$STATE_DIR/hivemind.db"
@@ -233,7 +281,7 @@ inputs:
               CFG="${cfg}"
               DEVENV_SRC="${devenvProject}"
             fi
-            export EMBEDDING_MODEL="''${EMBEDDING_MODEL:-fake}"
+            export EMBEDDING_MODEL="''${EMBEDDING_MODEL:-${if withEmbeddings then "BAAI/bge-small-en-v1.5" else "fake"}}"
             export EMBEDDING_DIM="384"
             export MCP_HOST="127.0.0.1"
             export MCP_PORT="''${MCP_PORT:-7070}"
@@ -247,23 +295,27 @@ inputs:
               export SSL_CERT_FILE="${cacertBundle}"
             fi
             export NIX_SSL_CERT_FILE="''${NIX_SSL_CERT_FILE:-$SSL_CERT_FILE}"
-            if [ "$EMBEDDING_MODEL" = "fake" ]; then
-              export APP_BIN="${appFake}/bin/hivemind-app"
-            else
-              export APP_BIN="${appReal}/bin/hivemind-app"
-              # Seed the pinned, content-addressed model into the cache and run offline, so
-              # the real embedder works with no runtime download. Only for the default model;
-              # a custom EMBEDDING_MODEL still downloads (via the baked CA bundle above).
-              if [ "$EMBEDDING_MODEL" = "BAAI/bge-small-en-v1.5" ]; then
-                if [ ! -e "$FASTEMBED_CACHE_PATH/models--qdrant--bge-small-en-v1.5-onnx-q" ]; then
-                  mkdir -p "$FASTEMBED_CACHE_PATH"
-                  cp -R ${hivemindModel}/. "$FASTEMBED_CACHE_PATH"/
-                  chmod -R u+w "$FASTEMBED_CACHE_PATH"
-                fi
-                export HF_HUB_OFFLINE="''${HF_HUB_OFFLINE:-1}"
+            export APP_BIN="${app}/bin/hivemind-app"
+            ${if withEmbeddings then ''
+            if [ "$EMBEDDING_MODEL" = "BAAI/bge-small-en-v1.5" ]; then
+              if [ ! -e "$FASTEMBED_CACHE_PATH/models--qdrant--bge-small-en-v1.5-onnx-q" ]; then
+                mkdir -p "$FASTEMBED_CACHE_PATH"
+                cp -R ${hivemindModel}/. "$FASTEMBED_CACHE_PATH"/
+                chmod -R u+w "$FASTEMBED_CACHE_PATH"
               fi
+              export HF_HUB_OFFLINE="''${HF_HUB_OFFLINE:-1}"
             fi
-            mkdir -p "$PGDATA" "$SOCK" "$HIVE_DIR/$OWNER" "$FASTEMBED_CACHE_PATH"
+            '' else ''
+            if [ "$EMBEDDING_MODEL" != "fake" ]; then
+              echo "Real embeddings require the up-real runtime." >&2
+              exit 1
+            fi
+            ''}
+            if [ ! -d "$HIVE_DIR/$OWNER" ]; then
+              echo "Hive owner folder is unavailable: $HIVE_DIR/$OWNER" >&2
+              exit 1
+            fi
+            mkdir -p "$PGDATA" "$SOCK" "$FASTEMBED_CACHE_PATH"
             SUP=$(resolve_supervisor)
             printf '%s' "$SUP" > "$STATE_DIR/supervisor"
             echo "hivemind-up: state=$STATE_DIR persistence=$PERSISTENCE pg=127.0.0.1:$PGPORT mcp=127.0.0.1:$MCP_PORT owner=$OWNER embedder=$EMBEDDING_MODEL supervisor=$SUP"
@@ -278,6 +330,7 @@ inputs:
                 echo "PGPORT=$PGPORT"
                 echo "PGUSER_NAME=$PGUSER_NAME"
                 echo "HIVEMIND_PATH=$HIVEMIND_PATH"
+                echo "HIVEMIND_ID=''${HIVEMIND_ID:-}"
                 echo "OWNER_HANDLE=$OWNER_HANDLE"
                 echo "ROSTER=$ROSTER"
                 echo "DATABASE_URL=$DATABASE_URL"
@@ -305,11 +358,20 @@ inputs:
             ${commonHead}
             SUP=$(cat "$STATE_DIR/supervisor" 2>/dev/null || resolve_supervisor)
             if [ "$SUP" = "devenv" ]; then
-              cd "$DEVENV_DIR" 2>/dev/null || { echo "no devenv project at $DEVENV_DIR (nothing to stop)"; exit 0; }
-              exec devenv processes down
+              cd "$DEVENV_DIR" 2>/dev/null || { echo "Cannot verify stopped devenv: missing $DEVENV_DIR" >&2; exit 1; }
+              devenv processes down
+              rm -f "$STATE_DIR/supervisor"
             else
-              if ! pc_daemon_alive; then echo "Hivemind stack is not running (nothing to stop)."; exit 0; fi
-              exec process-compose -U -u "$PC_SOCKET" down 2>/dev/null
+              if ! pc_daemon_alive; then
+                if [ -e "$STATE_DIR/supervisor" ] || [ -S "$PC_SOCKET" ]; then
+                  echo "Cannot verify the recorded supervisor has stopped; retaining state." >&2
+                  exit 1
+                fi
+                echo "Hivemind stack is not running (nothing to stop)."
+                exit 0
+              fi
+              process-compose -U -u "$PC_SOCKET" down
+              rm -f "$STATE_DIR/supervisor"
             fi
           '';
 
@@ -352,11 +414,13 @@ inputs:
     in
     {
       packages = forAllSystems (pkgs:
-        let rt = mkRuntime pkgs; in {
+        let rt = mkRuntime pkgs {}; real = mkRuntime pkgs { withEmbeddings = true; }; in {
           default = mkApp pkgs { withEmbeddings = true; };
           app = mkApp pkgs { withEmbeddings = true; };
           app-fake = mkApp pkgs { withEmbeddings = false; };
           up = rt.up;
+          up-fake = rt.up;
+          up-real = real.up;
           down = rt.down;
           status = rt.status;
           logs = rt.logs;
@@ -364,8 +428,10 @@ inputs:
         });
 
       apps = forAllSystems (pkgs:
-        let rt = mkRuntime pkgs; in {
+        let rt = mkRuntime pkgs {}; real = mkRuntime pkgs { withEmbeddings = true; }; in {
           up = { type = "app"; program = "${rt.up}/bin/hivemind-up"; };
+          up-fake = { type = "app"; program = "${rt.up}/bin/hivemind-up"; };
+          up-real = { type = "app"; program = "${real.up}/bin/hivemind-up"; };
           down = { type = "app"; program = "${rt.down}/bin/hivemind-down"; };
           status = { type = "app"; program = "${rt.status}/bin/hivemind-status"; };
           logs = { type = "app"; program = "${rt.logs}/bin/hivemind-logs"; };

@@ -1,7 +1,7 @@
 """Postgres integration tests (SPEC §4, §15).
 
 Marked ``integration`` and SKIPPED automatically when ``DATABASE_URL_TEST`` is
-unset or Postgres is unreachable (see ``conftest.pg_engine``). Bring up a local
+unset (see ``conftest.pg_engine``). Configured database failures fail the suite. Bring up a local
 pgvector with ``docker compose -f docker-compose.test.yml up -d`` and point the
 tests at it:
 
@@ -222,3 +222,22 @@ async def test_nearest_candidates_spans_both_tables(pg_engine) -> None:  # type:
     ids = {r.id for r, _ in hits}
     assert local_rec.id in ids
     assert team_rec.id in ids
+
+
+async def test_large_import_and_filtered_exact_pool(pg_engine) -> None:  # type: ignore[no-untyped-def]
+    from hivemind_app.schemas import SearchFilters
+
+    repo = _repo(pg_engine)
+    records = [
+        _rec(author="bob", title=f"bulk {i}", tags=["eligible"] if i < 250 else [])
+        for i in range(2200)
+    ]
+    # One logical file exceeds asyncpg's unchunked parameter limit.
+    assert await repo.import_file(records, "bob/large.ndjson") == 2200
+    assert await repo.is_file_ingested("bob/large.ndjson")
+    filters = SearchFilters(tags=["eligible"])
+    hits = await repo.nearest_candidates(records[0].embedding, pool=200, filters=filters)
+    assert len(hits) == 200  # larger than HNSW's default ef_search=40
+    assert all("eligible" in record.tags for record, _ in hits)
+    assert hits[0][0].id == records[0].id
+    assert len(await repo.recent_candidates(200, filters=filters)) == 200

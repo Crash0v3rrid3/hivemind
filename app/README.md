@@ -13,7 +13,7 @@ local Postgres (Postgres 16 + pgvector).
 | `db.py` | Async engine + sessionmaker; registers the pgvector codec on connect |
 | `models.py` | SQLAlchemy 2.0 models: `local_events`, `team_events`, `ingested_files` |
 | `schemas.py` | Pydantic v2 request/response models (no identity fields; author rejected) |
-| `embeddings.py` | `Embedder` protocol + lazy `SentenceTransformerEmbedder` + `FakeEmbedder` |
+| `embeddings.py` | `Embedder` protocol + lazy `FastEmbedEmbedder` + `FakeEmbedder` |
 | `serialization.py` | NDJSON (de)serialize, tolerant parse, atomic write, day bucketing |
 | `repository.py` | Async append-only CRUD, hidden-id + history computation, schema init |
 | `service.py` | `MemoryService`: add/update/delete/get/list/search/history/daily_summary |
@@ -44,7 +44,11 @@ python -m hivemind_app
 ```
 
 The MCP endpoint is served (streamable HTTP) at `http://MCP_HOST:MCP_PORT/mcp`
-(defaults `0.0.0.0:7777`). A `GET /healthz` liveness probe is also exposed.
+(defaults `0.0.0.0:7777`). A `GET /healthz` identity/readiness probe is also exposed. Docker publishes only
+on loopback; do not expose this unauthenticated service to a network.
+
+Existing databases need the [explicit migration](../docs/review-remediation.md)
+before startup. Back up pending writes before upgrading.
 
 ## Test
 

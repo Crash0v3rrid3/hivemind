@@ -11,19 +11,29 @@ Everything here is pure / filesystem-only and import-safe — no DB, no network.
 from __future__ import annotations
 
 import json
+import math
 import os
+import struct
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-# On-disk NDJSON format version. The file format is FROZEN within a major
-# version: changes are additive only (new optional keys), so a record written
-# by any v1.x node is readable by every other v1.x node. Readers ignore unknown
-# keys (forward-compatible), and a record with no ``schema_version`` is treated
-# as v1. Bump this only for a breaking format change, which is a new major.
-SCHEMA_VERSION = 1
+from .config import (
+    EVENT_TYPES,
+    STATUS_VALUES,
+    validate_handle,
+    validate_jira_project,
+    validate_jira_ticket,
+)
+
+# Wire-format version, independent of the application/package version. Version 2
+# requires explicit embedding-model provenance. Version 1 is decoded only as
+# legacy data with unknown provenance; a bound repository rejects it until an
+# operator verifies and migrates it. Unknown versions are never guessed.
+SCHEMA_VERSION = 2
+LEGACY_SCHEMA_VERSION = 1
 
 # Exact ordered key set for each NDJSON line (matches SPEC §5).
 LINE_KEYS: tuple[str, ...] = (
@@ -43,6 +53,7 @@ LINE_KEYS: tuple[str, ...] = (
     "ts",
     "created_at",
     "embedding",
+    "embedding_model",
 )
 
 
@@ -69,6 +80,7 @@ class EventRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
     supersedes: uuid.UUID | None = None
     deletes: uuid.UUID | None = None
+    embedding_model: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -109,9 +121,17 @@ def day_bucket(ts: datetime) -> str:
 
 
 def record_to_dict(record: EventRecord) -> dict[str, Any]:
-    """Convert an :class:`EventRecord` to a JSON-ready dict with all LINE_KEYS."""
-    return {
-        "schema_version": SCHEMA_VERSION,
+    """Emit v2 for known provenance, or v1 for explicit legacy tooling.
+
+    Production writes and bound-repository reads always carry a model. Keeping
+    the unknown-provenance path allows offline legacy inspection/migration; its
+    output cannot be imported into a bound production repository.
+    """
+    model = record.embedding_model
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise ValueError("embedding_model must be a nonempty string")
+    result = {
+        "schema_version": SCHEMA_VERSION if model is not None else LEGACY_SCHEMA_VERSION,
         "id": str(record.id),
         "author": record.author,
         "event_type": record.event_type,
@@ -128,16 +148,61 @@ def record_to_dict(record: EventRecord) -> dict[str, Any]:
         "created_at": dt_to_iso(record.created_at),
         "embedding": [float(x) for x in record.embedding],
     }
+    if model is not None:
+        result["embedding_model"] = model
+    return result
 
 
 def dict_to_record(obj: dict[str, Any]) -> EventRecord:
     """Build an :class:`EventRecord` from a parsed NDJSON object.
 
-    Unknown keys are ignored, so records from a newer (but same-major) writer
-    read cleanly. ``schema_version`` is advisory: a missing value means v1.
+    Only supported integer schema versions are accepted. Version 2 requires
+    nonempty model provenance. Missing version means legacy v1, whose model is
+    always unknown even if an extension key claims otherwise. Unknown optional
+    keys are ignored within supported versions.
 
     Raises ``KeyError``/``ValueError`` if the object is malformed.
     """
+    if not isinstance(obj, dict):
+        raise ValueError("record must be an object")
+    version = obj.get("schema_version", LEGACY_SCHEMA_VERSION)
+    if type(version) is not int or version not in (LEGACY_SCHEMA_VERSION, SCHEMA_VERSION):
+        raise ValueError(f"unsupported schema_version: {version!r}")
+    model = obj.get("embedding_model") if version == SCHEMA_VERSION else None
+    if version == SCHEMA_VERSION and (not isinstance(model, str) or not model.strip()):
+        raise ValueError("schema v2 requires a nonempty embedding_model")
+    for key in (
+        "author",
+        "event_type",
+        "status",
+        "title",
+        "body",
+        "jira_project",
+        "ts",
+        "created_at",
+    ):
+        if not isinstance(obj[key], str):
+            raise ValueError(f"{key} must be a string")
+    validate_handle(obj["author"])
+    validate_jira_project(obj["jira_project"])
+    validate_jira_ticket(obj.get("jira_ticket"))
+    if obj["event_type"] not in EVENT_TYPES or obj["status"] not in STATUS_VALUES:
+        raise ValueError("invalid event type or status")
+    if not isinstance(obj.get("tags", []), list) or any(
+        not isinstance(t, str) for t in obj.get("tags", [])
+    ):
+        raise ValueError("tags must be a list of strings")
+    if not isinstance(obj.get("metadata", {}), dict):
+        raise ValueError("metadata must be an object")
+    if not isinstance(obj.get("embedding"), list):
+        raise ValueError("embedding must be a list")
+    validate_embedding(obj["embedding"])
+    if (obj["event_type"] == "tombstone") != (obj.get("deletes") is not None):
+        raise ValueError("only tombstones must have a deletes reference")
+    if obj.get("supersedes") is not None and obj.get("deletes") is not None:
+        raise ValueError("event cannot supersede and delete")
+    if obj.get("supersedes") == obj["id"] or obj.get("deletes") == obj["id"]:
+        raise ValueError("self reference is invalid")
     return EventRecord(
         id=uuid.UUID(str(obj["id"])),
         author=str(obj["author"]),
@@ -154,7 +219,24 @@ def dict_to_record(obj: dict[str, Any]) -> EventRecord:
         ts=iso_to_dt(str(obj["ts"])),
         created_at=iso_to_dt(str(obj["created_at"])),
         embedding=[float(x) for x in obj["embedding"]],
+        embedding_model=model,
     )
+
+
+def validate_embedding(vector: list[float], dim: int | None = None) -> None:
+    if dim is not None and len(vector) != dim:
+        raise ValueError(f"embedding dimension {len(vector)} does not match {dim}")
+    if not vector or any(
+        isinstance(x, bool) or not isinstance(x, (float, int)) or not math.isfinite(x)
+        for x in vector
+    ):
+        raise ValueError("embedding must contain finite numbers")
+    try:
+        packed = struct.pack(f"<{len(vector)}f", *vector)
+    except (OverflowError, struct.error) as exc:
+        raise ValueError("embedding exceeds float32 range") from exc
+    if not all(math.isfinite(x) for x in struct.unpack(f"<{len(vector)}f", packed)):
+        raise ValueError("embedding exceeds float32 range")
 
 
 def record_to_line(record: EventRecord) -> str:
@@ -169,13 +251,15 @@ def serialize_records(records: list[EventRecord]) -> str:
     return "".join(record_to_line(r) + "\n" for r in records)
 
 
-def parse_ndjson(text: str) -> list[EventRecord]:
+def parse_ndjson(text: str, *, require_complete: bool = False) -> list[EventRecord]:
     """Tolerantly parse NDJSON text into records.
 
     Blank lines are skipped. A trailing line without a terminating newline is
     treated as potentially incomplete and is skipped if it does not parse as a
     complete JSON object. Lines that parse but are missing required keys raise.
     """
+    if require_complete and (not text or not text.endswith("\n")):
+        raise ValueError("incomplete NDJSON file; retry after publication completes")
     if not text:
         return []
 
@@ -207,14 +291,17 @@ def parse_ndjson(text: str) -> list[EventRecord]:
 # ---------------------------------------------------------------------------
 
 
-def atomic_write_text(path: str | os.PathLike[str], text: str) -> None:
+def atomic_write_text(
+    path: str | os.PathLike[str], text: str, *, create_parents: bool = True
+) -> None:
     """Atomically write ``text`` to ``path``.
 
     Writes to ``<path>.tmp``, flushes + fsyncs, then ``os.rename`` onto the
     final path (atomic on POSIX). The parent directory is created if needed.
     """
     dest = Path(path)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    if create_parents:
+        dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(text)

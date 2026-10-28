@@ -147,13 +147,15 @@ async def test_import_on_conflict_does_nothing(  # type: ignore[no-untyped-def]
     assert len(fake_repo.team) == 1
 
 
-async def test_import_skips_own_folder(  # type: ignore[no-untyped-def]
+async def test_import_restores_own_folder(  # type: ignore[no-untyped-def]
     fake_repo, identity, hive_root, make_record
 ) -> None:
     _write_batch(hive_root / "alice" / "2026-08-19", [make_record(author="alice")])
     inserted = await import_once(fake_repo, identity, hive_root)
-    assert inserted == 0
+    assert inserted == 1
     assert fake_repo.team == []
+    assert len(fake_repo.local) == 1
+    assert fake_repo.local[0].id in fake_repo.exported_ids
 
 
 async def test_import_filters_unknown_folder(  # type: ignore[no-untyped-def]
@@ -192,10 +194,12 @@ async def test_import_tolerates_partial_trailing_line(  # type: ignore[no-untype
     path.write_text(text, encoding="utf-8")
 
     inserted = await import_once(fake_repo, identity, hive_root)
-    assert inserted == 1
-    assert fake_repo.team[0].id == good.id
-    # File is still recorded as ingested (won't be reprocessed).
+    assert inserted == 0
     rel = path.relative_to(hive_root).as_posix()
+    assert not await fake_repo.is_file_ingested(rel)
+    second = make_record(author="bob")
+    path.write_text(serialize_records([good, second]), encoding="utf-8")
+    assert await import_once(fake_repo, identity, hive_root) == 2
     assert await fake_repo.is_file_ingested(rel)
 
 

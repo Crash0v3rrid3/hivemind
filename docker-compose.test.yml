@@ -23,7 +23,7 @@ services:
     ports:
       # exposed for host-run pytest integration (DATABASE_URL_TEST). Override the
       # host port if 5433 is taken: PG_HOST_PORT=5434 docker-compose ...
-      - "${PG_HOST_PORT:-5433}:5432"
+      - "127.0.0.1:${PG_HOST_PORT:-5433}:5432"
     tmpfs:
       - /var/lib/postgresql/data # in-memory: fast + disposable for tests
     healthcheck:
@@ -50,6 +50,6 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: "7777"
     ports:
-      - "${HOST_MCP_PORT:-7830}:7777" # host 7830 by default (avoids a local :7777)
+      - "127.0.0.1:${HOST_MCP_PORT:-7830}:7777" # host 7830 by default (avoids a local :7777)
     volumes:
       - ./.hive:/mnt/hivemind # local folder stands in for the Drive FUSE mount

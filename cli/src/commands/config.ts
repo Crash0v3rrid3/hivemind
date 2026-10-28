@@ -10,21 +10,7 @@ import { hivemindConfPath } from '../paths.js';
 
 function printResolved(): void {
   const cfg = loadResolvedConfig();
-  const view = {
-    ownerHandle: cfg.ownerHandle,
-    mountBackend: cfg.mountBackend,
-    gdriveFolderUrl: cfg.gdriveFolderUrl,
-    folderId: cfg.folderId,
-    gdriveDesktopPath: cfg.gdriveDesktopPath,
-    mcpPort: cfg.mcpPort,
-    roster: cfg.roster.length > 0 ? cfg.roster : '(admin roster.json in hive)',
-    mountPath: cfg.mountPath,
-    exportIntervalSec: cfg.exportIntervalSec,
-    importIntervalSec: cfg.importIntervalSec,
-    embeddings: cfg.embeddings,
-    imageTag: cfg.imageTag,
-  };
-  console.log(JSON.stringify(view, null, 2));
+  console.log(JSON.stringify(cfg, null, 2));
 }
 
 export function register(program: Command): void {
@@ -42,8 +28,14 @@ export function register(program: Command): void {
           return;
         }
         const editor = process.env.EDITOR ?? process.env.VISUAL ?? 'vi';
-        const res = spawnSync(editor, [confPath], { stdio: 'inherit' });
-        process.exitCode = res.status ?? 0;
+        // $EDITOR is a shell command (e.g. code --wait); pass the path as a
+        // positional argument so spaces and shell metacharacters stay literal.
+        const res = spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'hivemind-editor', confPath], {
+          stdio: 'inherit',
+        });
+        if (res.error) console.error(`could not start editor: ${res.error.message}`);
+        if (res.signal) console.error(`editor terminated by ${res.signal}`);
+        process.exitCode = res.status ?? 1;
         return;
       }
       // Default action (and --print) validates + shows the resolved config.

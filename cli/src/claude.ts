@@ -92,6 +92,11 @@ interface HookGroup {
   [k: string]: unknown;
 }
 
+/** Quote one literal POSIX shell argument. */
+export function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
 function groupContainsCommand(group: HookGroup, command: string): boolean {
   return Array.isArray(group.hooks) && group.hooks.some((h) => h && h.command === command);
 }
@@ -106,6 +111,7 @@ export function mergeUserPromptSubmitHook(
   settings: Record<string, unknown>,
   command: string,
 ): Record<string, unknown> {
+  const quoted = command.startsWith('/') ? shellQuote(command) : command;
   const next: Record<string, unknown> = { ...settings };
   const hooks = { ...asRecord(next.hooks) };
 
@@ -114,9 +120,15 @@ export function mergeUserPromptSubmitHook(
     : [];
   const groups: HookGroup[] = existingGroups.map((g) => ({ ...g }));
 
-  const alreadyPresent = groups.some((g) => groupContainsCommand(g, command));
+  for (const group of groups) {
+    if (Array.isArray(group.hooks))
+      group.hooks = group.hooks.map((hook) =>
+        hook.command === command ? { ...hook, command: quoted } : hook,
+      );
+  }
+  const alreadyPresent = groups.some((g) => groupContainsCommand(g, quoted));
   if (!alreadyPresent) {
-    groups.push({ hooks: [{ type: 'command', command }] });
+    groups.push({ hooks: [{ type: 'command', command: quoted }] });
   }
 
   hooks.UserPromptSubmit = groups;
@@ -136,9 +148,10 @@ export function removeClaudeMdBlock(existing: string): string {
   if (begin === -1 || end === -1 || end < begin) return existing;
   const before = existing.slice(0, begin);
   const after = existing.slice(end + USAGE_BLOCK_END.length);
-  const joined = before.replace(/\s+$/, '') + after.replace(/^\s+/, '');
-  const trimmed = joined.replace(/\s+$/, '');
-  return trimmed === '' ? '' : trimmed + '\n';
+  if (before === '' && after.trim() === '') return '';
+  // An appended block owns its extra blank separator and trailing newline.
+  if (after === '\n' && before.endsWith('\n\n')) return before.slice(0, -1);
+  return before + after;
 }
 
 /** Remove one MCP server entry, preserving siblings and other keys. Unchanged if absent. PURE. */
@@ -163,13 +176,17 @@ export function removeUserPromptSubmitHook(
   settings: Record<string, unknown>,
   command: string,
 ): Record<string, unknown> {
+  const quoted = command.startsWith('/') ? shellQuote(command) : command;
   const next: Record<string, unknown> = { ...settings };
   const hooks = { ...asRecord(next.hooks) };
   if (!Array.isArray(hooks.UserPromptSubmit)) return next;
   const groups = (hooks.UserPromptSubmit as HookGroup[])
     .map((g) =>
       Array.isArray(g.hooks)
-        ? { ...g, hooks: g.hooks.filter((h) => !(h && h.command === command)) }
+        ? {
+            ...g,
+            hooks: g.hooks.filter((h) => !(h && (h.command === command || h.command === quoted))),
+          }
         : g,
     )
     .filter((g) => !(Array.isArray(g.hooks) && g.hooks.length === 0));

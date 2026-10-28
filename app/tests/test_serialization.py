@@ -81,7 +81,7 @@ def test_day_bucket_converts_to_utc_before_bucketing() -> None:
 
 
 def test_record_to_dict_has_exact_line_keys(make_record) -> None:  # type: ignore[no-untyped-def]
-    obj = record_to_dict(make_record())
+    obj = record_to_dict(make_record(embedding_model="fake"))
     assert tuple(obj.keys()) == LINE_KEYS
 
 
@@ -260,3 +260,56 @@ def test_author_from_empty_path_raises() -> None:
 )
 def test_is_ndjson_file(name: str, expected: bool) -> None:
     assert is_ndjson_file(name) is expected
+
+
+def test_v2_provenance_roundtrip(make_record) -> None:  # type: ignore[no-untyped-def]
+    original = make_record(embedding_model="fake")
+    obj = record_to_dict(original)
+    assert obj["schema_version"] == 2
+    assert dict_to_record(obj).embedding_model == "fake"
+
+
+def test_unknown_provenance_emits_legacy_only(make_record) -> None:  # type: ignore[no-untyped-def]
+    obj = record_to_dict(make_record())
+    assert obj["schema_version"] == 1
+    assert "embedding_model" not in obj
+    assert dict_to_record(obj).embedding_model is None
+    del obj["schema_version"]
+    assert dict_to_record(obj).embedding_model is None
+
+
+def test_legacy_extension_cannot_claim_v2_provenance(make_record) -> None:  # type: ignore[no-untyped-def]
+    obj = record_to_dict(make_record())
+    obj["embedding_model"] = "fake"
+    assert dict_to_record(obj).embedding_model is None
+
+
+@pytest.mark.parametrize("version", [0, 3, -1, True, False, "2", 2.0, None])
+def test_unsupported_schema_version_rejected(make_record, version) -> None:  # type: ignore[no-untyped-def]
+    obj = record_to_dict(make_record(embedding_model="fake"))
+    obj["schema_version"] = version
+    with pytest.raises(ValueError, match="unsupported schema_version"):
+        dict_to_record(obj)
+
+
+@pytest.mark.parametrize("model", [None, "", " ", 1, [], {}])
+def test_v2_requires_nonempty_model(make_record, model) -> None:  # type: ignore[no-untyped-def]
+    obj = record_to_dict(make_record(embedding_model="fake"))
+    obj["embedding_model"] = model
+    with pytest.raises(ValueError, match="v2 requires"):
+        dict_to_record(obj)
+    del obj["embedding_model"]
+    with pytest.raises(ValueError, match="v2 requires"):
+        dict_to_record(obj)
+
+
+@pytest.mark.parametrize("model", ["", " "])
+def test_writer_rejects_blank_model(make_record, model) -> None:  # type: ignore[no-untyped-def]
+    with pytest.raises(ValueError, match="nonempty"):
+        record_to_dict(make_record(embedding_model=model))
+
+
+def test_v2_unknown_optional_key_is_ignored(make_record) -> None:  # type: ignore[no-untyped-def]
+    obj = record_to_dict(make_record(embedding_model="fake"))
+    obj["future_optional_field"] = {"a": 1}
+    assert dict_to_record(obj).embedding_model == "fake"

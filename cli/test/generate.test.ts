@@ -3,6 +3,10 @@ import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync } from 'no
 import path from 'node:path';
 import {
   APP_IMAGE_NAME,
+  appImageTag,
+  composeScalar,
+  reconcileRcloneConf,
+  hiveIdentity,
   CONTAINER_HIVEMIND_PATH,
   DATABASE_URL,
   EMBEDDING_DIM,
@@ -148,7 +152,7 @@ describe('renderDockerCompose', () => {
   it('builds the app image locally and tags it hivemind:<version> (no registry pull)', () => {
     expect(compose).toContain('build:');
     expect(compose).toContain('context: ./app');
-    expect(compose).toContain(`image: ${APP_IMAGE_NAME}:2.3.4`);
+    expect(compose).toContain(`image: "${APP_IMAGE_NAME}:2.3.4-real"`);
     expect(compose).not.toContain('ghcr.io');
     expect(compose).toContain('INSTALL_EMBEDDINGS: "1"'); // CFG.embeddings === true
   });
@@ -160,7 +164,7 @@ describe('renderDockerCompose', () => {
   });
 
   it('binds the host mount path into the container path for gdrive and app', () => {
-    const occurrences = compose.split(`source: ${CFG.mountPath}`).length - 1;
+    const occurrences = compose.split(`source: ${composeScalar(CFG.mountPath)}`).length - 1;
     expect(occurrences).toBe(2);
     expect(compose).toContain(`target: ${CONTAINER_HIVEMIND_PATH}`);
   });
@@ -172,7 +176,7 @@ describe('renderDockerCompose', () => {
   });
 
   it('publishes the MCP port via compose interpolation', () => {
-    expect(compose).toContain('"${MCP_PORT}:${MCP_PORT}"');
+    expect(compose).toContain('"127.0.0.1:${MCP_PORT}:${MCP_PORT}"');
   });
 
   it('references the sibling .env via env_file', () => {
@@ -182,6 +186,8 @@ describe('renderDockerCompose', () => {
 
   it('gates app startup on healthy gdrive + postgres', () => {
     expect(compose).toContain('condition: service_healthy');
+    expect(compose).toContain('restart: true');
+    expect(compose).toContain('HIVEMIND_FOLDER_ID: "FID123"');
   });
 
   it('quotes the rclone remote in the command (YAML would parse "hivemind:" as a map)', () => {
@@ -209,7 +215,7 @@ describe('renderDockerCompose (gdrive_desktop)', () => {
   });
 
   it('bind-mounts the Drive-for-Desktop folder into the container path', () => {
-    expect(compose).toContain(`source: ${DESKTOP_CFG.gdriveDesktopPath}`);
+    expect(compose).toContain(`source: ${composeScalar(DESKTOP_CFG.gdriveDesktopPath!)}`);
     expect(compose).toContain(`target: ${CONTAINER_HIVEMIND_PATH}`);
   });
 
@@ -221,9 +227,9 @@ describe('renderDockerCompose (gdrive_desktop)', () => {
   it('builds the app image locally (no registry) and publishes the MCP port', () => {
     expect(compose).toContain('build:');
     expect(compose).toContain('context: ./app');
-    expect(compose).toContain(`image: ${APP_IMAGE_NAME}:2.3.4`);
+    expect(compose).toContain(`image: "${APP_IMAGE_NAME}:2.3.4-real"`);
     expect(compose).not.toContain('ghcr.io');
-    expect(compose).toContain('"${MCP_PORT}:${MCP_PORT}"');
+    expect(compose).toContain('"127.0.0.1:${MCP_PORT}:${MCP_PORT}"');
   });
 });
 
@@ -288,7 +294,7 @@ describe('writeGeneratedFiles', () => {
     expect(readFileSync(paths.rclone!, 'utf8')).toContain('token = TOKENVAL');
   });
 
-  it('skips rclone.conf when skipRclone is set', () => {
+  it('reconciles rclone.conf when skipRclone is set', () => {
     const { dir, cleanup } = makeTempDir();
     cleanups.push(cleanup);
     const hmDir = path.join(dir, 'hivemind');
@@ -296,8 +302,8 @@ describe('writeGeneratedFiles', () => {
     cleanups.push(restore);
 
     const paths = writeGeneratedFiles(CFG, { skipRclone: true });
-    expect(paths.rclone).toBeUndefined();
-    expect(existsSync(path.join(hmDir, 'rclone.conf'))).toBe(false);
+    expect(paths.rclone).toBe(path.join(hmDir, 'rclone.conf'));
+    expect(existsSync(path.join(hmDir, 'rclone.conf'))).toBe(true);
     expect(existsSync(paths.env)).toBe(true);
     expect(existsSync(paths.compose)).toBe(true);
   });
@@ -350,5 +356,38 @@ describe('stageAppSource', () => {
     const restore = withEnv({ HIVEMIND_DIR: path.join(dir, 'hivemind') });
     cleanups.push(restore);
     expect(() => stageAppSource(path.join(dir, 'does-not-exist'))).toThrow(/not found|not built/);
+  });
+});
+
+
+describe('deployment hardening', () => {
+  it.each([CFG, DESKTOP_CFG, SQLITE_CFG, SQLITE_DESKTOP_CFG])('keeps all variants local', (cfg) => {
+    const compose = renderDockerCompose(cfg);
+    expect(compose).toContain('pull_policy: never');
+    expect(compose).toContain('"127.0.0.1:${MCP_PORT}:${MCP_PORT}"');
+    expect(compose).toContain('create_host_path: false');
+    expect(appImageTag({ ...cfg, embeddings: false })).not.toBe(appImageTag({ ...cfg, embeddings: true }));
+  });
+
+  it.each(['/tmp/a # comment', '/tmp/a: b', '/tmp/$HOME/${USER}', '/tmp/quote"and\\slash', '/tmp/a\nb'])('escapes literal YAML/Compose paths: %s', (mountPath) => {
+    const rendered = composeScalar(mountPath);
+    expect(JSON.parse(rendered).replace(/\$\$/g, '$')).toBe(mountPath);
+    expect(renderDockerCompose({ ...CFG, mountPath })).toContain(`source: ${rendered}`);
+  });
+
+  it('preserves credentials, custom options and other remotes when the hive changes', () => {
+    const original = '[other]\ntype = local\n[hivemind]\ntype = drive\nroot_folder_id = OLD\ntoken = SECRET\nclient_id = CUSTOM\nteam_drive = TEAM\n[next]\ntype = local\n';
+    const updated = reconcileRcloneConf(CFG, original);
+    expect(updated).toContain('root_folder_id = FID123');
+    expect(updated).not.toContain('OLD');
+    expect(updated).toContain('token = SECRET');
+    expect(updated).toContain('client_id = CUSTOM');
+    expect(updated).toContain('team_drive = TEAM');
+    expect(updated).toContain('[next]\ntype = local');
+    expect(reconcileRcloneConf(CFG, updated)).toBe(updated);
+  });
+
+  it('changes data identity when the remote changes under the same mount', () => {
+    expect(hiveIdentity(CFG)).not.toBe(hiveIdentity({ ...CFG, folderId: 'OTHER' }));
   });
 });
