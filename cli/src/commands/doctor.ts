@@ -9,7 +9,7 @@
  * Exits non-zero if any critical check fails.
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Command } from 'commander';
 import {
@@ -17,6 +17,7 @@ import {
   ConfigError,
   hostHivePath,
   loadResolvedConfig,
+  validateHandle,
   type ResolvedConfig,
 } from '../config.js';
 import { runComposeCapture } from '../docker.js';
@@ -198,25 +199,55 @@ export function checkCannotWritePeer(cfg: ResolvedConfig): CheckResult {
   };
 }
 
-function checkRosterSuperset(cfg: ResolvedConfig): CheckResult {
-  const folders = listHiveFolders(hostHivePath(cfg));
-  if (cfg.roster.length === 0) {
+export function checkRosterSuperset(cfg: ResolvedConfig): CheckResult {
+  const result = { name: 'roster ⊇ folders', ok: true, critical: false, detail: '' };
+  try {
+    const hive = hostHivePath(cfg);
+    const folders = listHiveFolders(hive);
+    let roster = cfg.roster;
+    let source = 'explicit roster';
+    if (roster.length === 0) {
+      const adminPath = path.join(hive, 'roster.json');
+      let contents: string;
+      try {
+        contents = readFileSync(adminPath, 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        return {
+          ...result,
+          detail:
+            'no explicit roster or admin roster.json; directory discovery accepts valid handle folders (no membership allowlist)',
+        };
+      }
+      const data: unknown = JSON.parse(contents);
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new ConfigError('roster.json must be a nonempty array of handles');
+      }
+      roster = data.map((handle: unknown) => {
+        if (typeof handle !== 'string')
+          throw new ConfigError('roster.json contains a non-string handle');
+        return validateHandle(handle);
+      });
+      source = 'admin roster.json';
+    }
+    const rosterSet = new Set(roster);
+    const unknown = folders.filter((f) => !rosterSet.has(f));
     return {
-      name: 'roster ⊇ folders',
-      ok: true,
-      critical: false,
-      detail: 'no explicit roster (admin roster.json governs); skipped',
+      ...result,
+      ok: unknown.length === 0,
+      detail:
+        unknown.length === 0
+          ? `all hive folders are in the ${source}`
+          : `${source}: unknown folders: ${unknown.join(', ')}`,
+    };
+  } catch (err) {
+    return {
+      ...result,
+      ok: false,
+      critical: true,
+      detail: `effective roster check failed: ${(err as Error).message}`,
     };
   }
-  const rosterSet = new Set(cfg.roster);
-  const unknown = folders.filter((f) => !rosterSet.has(f));
-  const ok = unknown.length === 0;
-  return {
-    name: 'roster ⊇ folders',
-    ok,
-    critical: false,
-    detail: ok ? 'all hive folders are in the roster' : `unknown folders: ${unknown.join(', ')}`,
-  };
 }
 
 function checkImageTag(cfg: ResolvedConfig): CheckResult {

@@ -117,10 +117,14 @@ export async function provisionUser(
   const conflictingWriter = permissions.find(
     (p) =>
       ['writer', 'organizer', 'fileOrganizer'].includes(p.role) &&
-      !p.permissionDetails?.every((d) => d.inherited === true) &&
       (p.type !== 'user' || p.emailAddress?.toLowerCase() !== email.toLowerCase()),
   );
   if (conflictingWriter) {
+    if (conflictingWriter.permissionDetails?.some((detail) => detail.inherited)) {
+      throw new Error(
+        `Folder ${folder.id} inherits a different writer; remediate the parent folder ACL before provisioning`,
+      );
+    }
     throw new Error(
       `Folder ${folder.id} already has a different writer; resolve author ownership before provisioning`,
     );

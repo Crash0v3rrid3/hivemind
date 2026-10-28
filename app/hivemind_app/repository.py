@@ -130,6 +130,7 @@ def _fingerprint(record: EventRecord) -> str:
         )
     )
     data.pop("embedding_model", None)
+    data.pop("schema_version", None)
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
@@ -291,14 +292,15 @@ class Repository:
             return set(rows)
 
     async def list_unexported_local(self) -> list[EventRecord]:
-        """Return at most 1000 unexported, unquarantined local records."""
+        """Return at most 1000 unpublished local records, including conflict evidence.
+
+        Read quarantine must not suppress publication: peers need both original
+        payloads to detect a UUID collision and converge on the same quarantine.
+        """
         async with self._sessionmaker() as session:
             stmt = (
                 select(LocalEvent)
-                .where(
-                    LocalEvent.exported_at.is_(None),
-                    LocalEvent.id.not_in(select(ConflictedEvent.id)),
-                )
+                .where(LocalEvent.exported_at.is_(None))
                 .order_by(LocalEvent.created_at.asc())
                 .limit(1000)
             )

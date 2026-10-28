@@ -175,12 +175,13 @@ friction, ai_session, tombstone` (tombstone is internal, produced only by delete
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "uuid", "author": "alice", "event_type": "decision", "status": "info",
   "title": "…", "body": "…", "jira_project": "BETEL", "jira_ticket": "BETEL-42",
   "tags": ["a","b"], "metadata": {}, "supersedes": null, "deletes": null,
   "ts": "2026-08-19T10:00:00Z", "created_at": "2026-08-19T10:00:00Z",
-  "embedding": [ /* 384 floats, normalized */ ]
+  "embedding": [ /* 384 floats, normalized */ ],
+  "embedding_model": "BAAI/bge-small-en-v1.5"
 }
 ```
 
@@ -191,11 +192,24 @@ authoritative author is the owning folder handle, which the importer stamps.
 missing or mismatched provenance; see [upgrade instructions](docs/review-remediation.md).
 The database is also bound to owner and hive identity, and cannot be silently reused.
 
-**Format version.** `schema_version` (currently `1`) declares the on-disk format. The format is
-**frozen within a major version**: changes are additive only (new optional keys), so a record
-written by any v1.x node is readable by every other v1.x node. Readers **ignore unknown keys**
-(forward-compatible) and treat a missing `schema_version` as `1`. A breaking format change requires
-a new major and a bump of `schema_version`.
+**Format version.** `schema_version` is the wire-format version, independent of the
+application's alpha package version. Current writers emit **version 2**, which requires a
+nonempty `embedding_model`. Readers accept integer versions `1` and `2` only; unsupported
+versions, noninteger versions and v2 records missing valid provenance are rejected. Unknown
+optional keys within a supported version are ignored. Further incompatible wire changes must
+increment this schema version and document the upgrade procedure.
+
+A missing version means legacy v1. V1 records decode with **unknown model provenance**, even
+if an optional extension key claims a model. Parsing v1 exists for offline inspection and
+explicit migration, not automatic production import: bound repositories reject these records.
+The low-level serializer can emit v1 when handed a record with unknown provenance, for legacy
+migration tooling; production service writes and bound-repository exports carry a model and
+therefore emit v2. This is a deliberate compatibility break, not an additive v1 field.
+
+Upgrade all hive members together after backing up their databases. Old readers may ignore
+schema versions and cannot safely enforce v2 provenance; mixed old/new nodes are unsupported.
+Follow the [migration and republishing procedure](docs/review-remediation.md) before resuming
+shared writes. No existing archive is silently relabeled with a guessed model.
 
 ---
 
@@ -229,7 +243,9 @@ flowchart TB
 ## 7. Export & import loops
 
 **Export** (every `EXPORT_INTERVAL_SEC`, default 60):
-1. Read a bounded batch of pending local records, excluding quarantined ids. If none, sleep.
+1. Read a bounded batch of pending local records, including original records whose IDs are
+   quarantined. Exporting this original evidence lets peers detect the same conflicts;
+   quarantine still excludes conflicting IDs from visible reads. If none, sleep.
 2. Group by UTC day of `ts`.
 3. Require the existing hive and provisioned owner folder; create only its day directory
    and serialize to a NEW batch file (atomic).

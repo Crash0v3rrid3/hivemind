@@ -28,12 +28,12 @@ from .config import (
     validate_jira_ticket,
 )
 
-# On-disk NDJSON format version. The file format is FROZEN within a major
-# version: changes are additive only (new optional keys), so a record written
-# by any v1.x node is readable by every other v1.x node. Readers ignore unknown
-# keys (forward-compatible), and a record with no ``schema_version`` is treated
-# as v1. Bump this only for a breaking format change, which is a new major.
-SCHEMA_VERSION = 1
+# Wire-format version, independent of the application/package version. Version 2
+# requires explicit embedding-model provenance. Version 1 is decoded only as
+# legacy data with unknown provenance; a bound repository rejects it until an
+# operator verifies and migrates it. Unknown versions are never guessed.
+SCHEMA_VERSION = 2
+LEGACY_SCHEMA_VERSION = 1
 
 # Exact ordered key set for each NDJSON line (matches SPEC §5).
 LINE_KEYS: tuple[str, ...] = (
@@ -121,9 +121,17 @@ def day_bucket(ts: datetime) -> str:
 
 
 def record_to_dict(record: EventRecord) -> dict[str, Any]:
-    """Convert an :class:`EventRecord` to a JSON-ready dict with all LINE_KEYS."""
-    return {
-        "schema_version": SCHEMA_VERSION,
+    """Emit v2 for known provenance, or v1 for explicit legacy tooling.
+
+    Production writes and bound-repository reads always carry a model. Keeping
+    the unknown-provenance path allows offline legacy inspection/migration; its
+    output cannot be imported into a bound production repository.
+    """
+    model = record.embedding_model
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise ValueError("embedding_model must be a nonempty string")
+    result = {
+        "schema_version": SCHEMA_VERSION if model is not None else LEGACY_SCHEMA_VERSION,
         "id": str(record.id),
         "author": record.author,
         "event_type": record.event_type,
@@ -139,20 +147,30 @@ def record_to_dict(record: EventRecord) -> dict[str, Any]:
         "ts": dt_to_iso(record.ts),
         "created_at": dt_to_iso(record.created_at),
         "embedding": [float(x) for x in record.embedding],
-        "embedding_model": record.embedding_model,
     }
+    if model is not None:
+        result["embedding_model"] = model
+    return result
 
 
 def dict_to_record(obj: dict[str, Any]) -> EventRecord:
     """Build an :class:`EventRecord` from a parsed NDJSON object.
 
-    Unknown keys are ignored, so records from a newer (but same-major) writer
-    read cleanly. ``schema_version`` is advisory: a missing value means v1.
+    Only supported integer schema versions are accepted. Version 2 requires
+    nonempty model provenance. Missing version means legacy v1, whose model is
+    always unknown even if an extension key claims otherwise. Unknown optional
+    keys are ignored within supported versions.
 
     Raises ``KeyError``/``ValueError`` if the object is malformed.
     """
     if not isinstance(obj, dict):
         raise ValueError("record must be an object")
+    version = obj.get("schema_version", LEGACY_SCHEMA_VERSION)
+    if type(version) is not int or version not in (LEGACY_SCHEMA_VERSION, SCHEMA_VERSION):
+        raise ValueError(f"unsupported schema_version: {version!r}")
+    model = obj.get("embedding_model") if version == SCHEMA_VERSION else None
+    if version == SCHEMA_VERSION and (not isinstance(model, str) or not model.strip()):
+        raise ValueError("schema v2 requires a nonempty embedding_model")
     for key in (
         "author",
         "event_type",
@@ -185,8 +203,6 @@ def dict_to_record(obj: dict[str, Any]) -> EventRecord:
         raise ValueError("event cannot supersede and delete")
     if obj.get("supersedes") == obj["id"] or obj.get("deletes") == obj["id"]:
         raise ValueError("self reference is invalid")
-    if obj.get("embedding_model") is not None and not isinstance(obj["embedding_model"], str):
-        raise ValueError("embedding_model must be a string")
     return EventRecord(
         id=uuid.UUID(str(obj["id"])),
         author=str(obj["author"]),
@@ -203,7 +219,7 @@ def dict_to_record(obj: dict[str, Any]) -> EventRecord:
         ts=iso_to_dt(str(obj["ts"])),
         created_at=iso_to_dt(str(obj["created_at"])),
         embedding=[float(x) for x in obj["embedding"]],
-        embedding_model=obj.get("embedding_model"),
+        embedding_model=model,
     )
 
 

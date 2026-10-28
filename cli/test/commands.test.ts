@@ -164,3 +164,52 @@ it('failed OAuth never overwrites the existing rclone config', () => {
   expect(setup.configureRclone({ ...cfg, folderId: 'NEW' })).toBe(false);
   expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
 });
+
+describe('doctor effective roster', () => {
+  function adminRoster(contents: string): void {
+    fs.writeFileSync(path.join(home, 'hive/roster.json'), contents);
+  }
+
+  it('uses a valid administrator roster when no explicit roster is configured', () => {
+    peers();
+    adminRoster('["alice", "bob"]');
+    expect(doctor.checkRosterSuperset(cfg)).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining('admin roster.json'),
+    });
+  });
+
+  it('reports folders missing from the effective administrator roster', () => {
+    peers();
+    adminRoster('["alice"]');
+    expect(doctor.checkRosterSuperset(cfg)).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('unknown folders: bob'),
+    });
+  });
+
+  it.each(['{bad json', '[]', '{}', '[12]', '["../outside"]', '["Alice"]'])(
+    'fails critically for invalid administrator roster %s',
+    (contents) => {
+      adminRoster(contents);
+      expect(doctor.checkRosterSuperset(cfg)).toMatchObject({ ok: false, critical: true });
+    },
+  );
+
+  it('lets explicit roster override even a malformed administrator roster', () => {
+    peers();
+    adminRoster('invalid');
+    expect(doctor.checkRosterSuperset({ ...cfg, roster: ['alice', 'bob'] })).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining('explicit roster'),
+    });
+  });
+
+  it('clearly reports directory discovery fallback when no roster exists', () => {
+    peers();
+    expect(doctor.checkRosterSuperset(cfg)).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining('directory discovery'),
+    });
+  });
+});

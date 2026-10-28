@@ -14,7 +14,7 @@ from hivemind_app.db import create_engine, create_sessionmaker
 from hivemind_app.embeddings import FakeEmbedder
 from hivemind_app.loops import export_once, import_once
 from hivemind_app.repository import Repository, init_schema
-from hivemind_app.serialization import record_to_dict, serialize_records
+from hivemind_app.serialization import EventRecord, record_to_dict, serialize_records
 
 
 @pytest.fixture
@@ -185,3 +185,58 @@ async def test_zero_vectors_cannot_starve_nearest_pool(repo, record):  # type: i
     hits = await repo.nearest_candidates(record.embedding, 200)
     assert hits[0][0].id == record.id
     assert hits[0][1] == pytest.approx(0.0, abs=1e-6)
+
+
+async def test_pending_local_conflict_is_published_and_all_replicas_converge(
+    repo: Repository, record: EventRecord, tmp_path: Path
+) -> None:
+    """An early peer collision cannot prevent the original author's evidence syncing."""
+    hive = tmp_path / "hive"
+    for owner in ("alice", "bob", "cara"):
+        (hive / owner).mkdir(parents=True)
+    engines = [
+        create_engine(f"sqlite+aiosqlite:///{tmp_path / (owner + '.db')}")
+        for owner in ("bob", "cara")
+    ]
+    try:
+        for engine in engines:
+            await init_schema(engine)
+        bob, cara = [Repository(create_sessionmaker(engine)) for engine in engines]
+        await repo.insert_local(record)
+        collision = replace(record, author="bob", title="conflicting peer payload")
+        await bob.insert_local(collision)
+        assert len(await export_once(bob, "bob", hive)) == 1
+
+        # Alice discovers the conflict before her pending original is published.
+        await import_once(repo, Identity("alice"), hive)
+        assert await repo.get_by_id(record.id) is None
+        assert await repo.recent_candidates(10) == []
+        # A third replica initially has only Bob's published evidence.
+        await import_once(cara, Identity("cara"), hive)
+        initially_visible = await cara.get_by_id(record.id)
+        assert initially_visible is not None and initially_visible.author == "bob"
+
+        assert len(await export_once(repo, "alice", hive)) == 1
+        for node, owner in ((repo, "alice"), (bob, "bob"), (cara, "cara")):
+            await import_once(node, Identity(owner), hive)
+            assert await node.get_by_id(record.id) is None
+            assert await node.recent_candidates(10) == []
+            assert await node.nearest_candidates(record.embedding, 10) == []
+            assert await node.history_chain(record.id) == []
+            # Publication and ingestion retries preserve the common quarantine.
+            assert await export_once(node, owner, hive) == []
+            assert await import_once(node, Identity(owner), hive) == 0
+            assert await node.get_by_id(record.id) is None
+    finally:
+        for engine in engines:
+            await engine.dispose()
+
+
+async def test_wire_envelope_does_not_make_equal_payloads_conflict(
+    repo: Repository, record: EventRecord
+) -> None:
+    tagged = replace(record, embedding_model="fake")
+    assert await repo.import_records([tagged]) == 1
+    # An unbound migration repository does not retain wire-envelope metadata.
+    assert await repo.import_records([tagged]) == 0
+    assert await repo.get_by_id(record.id) is not None

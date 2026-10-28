@@ -3,6 +3,22 @@
 This change addresses review findings R01–R40 against commit
 `7a25e8dce65def82dea6d613809b35051b06bd0b`.
 
+## Wire format and coordinated upgrades
+
+New production exports use **wire schema v2**, requiring a nonempty `embedding_model`.
+This wire version is independent of the alpha application's package version. The reader
+validates integer versions 1 and 2 and rejects unknown versions. V1 (including a missing
+version) is parsed only as unknown-provenance legacy data; even a v1 extension named
+`embedding_model` cannot supply v2 provenance. Bound repositories reject that data until
+explicit migration. Low-level serialization of unknown-provenance records remains v1
+for offline legacy tooling, while production writes and exports always emit v2.
+
+Stop and upgrade **every hive member** before resuming shared writes. Mixed old/new
+nodes are unsupported: older readers may ignore the schema version and accept v2 without
+its provenance checks; upgraded nodes defer old v1 files. Keep immutable legacy archives,
+but republish verified owner records as new v2 files using the procedure below. Do not edit
+schema numbers in place or infer the model merely from vector dimensions.
+
 ## Upgrade existing nodes without losing pending writes
 
 New databases bind their owner, hive identity and embedding model at startup.
@@ -26,7 +42,7 @@ cannot prove their hive or vector model automatically.
    Run this inside the same runtime/network that can access the database. The app
    must remain stopped. This validates vector dimensions and values and local
    authorship, binds previously unbound state, and queues owner records for new
-   immutable NDJSON files carrying explicit model provenance. It never changes
+   immutable schema-v2 NDJSON files carrying explicit model provenance. It never changes
    record payloads or permits an existing binding to be reassigned.
 4. Start the node, confirm successful exports, and retain backups until the other
    upgraded nodes have imported the new files. Every member with legacy files must

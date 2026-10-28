@@ -34,6 +34,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   NDJSON files on the mount are unaffected.
 
 ### Fixed
+- Follow-up review: reject inherited conflicting Drive writers, validate the effective
+  administrator roster in doctor, and publish quarantined local evidence so replicas
+  converge. The provenance-required wire format is explicitly schema v2.
+- CI uses supported macOS 15 ARM/Intel runners and the current pinned Nix installer.
 - Review hardening across sync integrity, identity binding, query correctness, MCP
   validation, CLI activation/shutdown, deployment and release gates. See the
   [R01–R40 remediation and upgrade guide](docs/review-remediation.md). Existing

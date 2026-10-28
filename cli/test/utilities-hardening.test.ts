@@ -213,18 +213,16 @@ it.each(['http://localhost:7777/mcp/', 'http://localhost:7777/mcp?x=1#fragment']
   },
 );
 it('refuses author identity reassignment on a bound folder', async () => {
-  const fetch = vi
-    .fn()
-    .mockResolvedValueOnce(
-      Response.json({
-        files: [
-          {
-            id: 'F',
-            appProperties: { hivemindHandle: 'alice', hivemindMemberEmail: 'original@example.com' },
-          },
-        ],
-      }),
-    );
+  const fetch = vi.fn().mockResolvedValueOnce(
+    Response.json({
+      files: [
+        {
+          id: 'F',
+          appProperties: { hivemindHandle: 'alice', hivemindMemberEmail: 'original@example.com' },
+        },
+      ],
+    }),
+  );
   vi.stubGlobal('fetch', fetch);
   await expect(provisionUser('token', 'H', 'alice', 'other@example.com')).rejects.toThrow(
     'bound to another member',
@@ -262,4 +260,52 @@ it('upgrades an existing reader without creating another permission', async () =
   await provisionUser('token', 'H', 'alice', 'a@example.com');
   expect(fetch.mock.calls[2]![0]).toContain('/permissions/P');
   expect(fetch.mock.calls[2]![1]).toMatchObject({ method: 'PATCH', body: '{"role":"writer"}' });
+});
+
+it.each(['writer', 'organizer', 'fileOrganizer'])(
+  'refuses inherited conflicting %s permissions and directs parent ACL remediation',
+  async (role) => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ files: [{ id: 'F' }] }))
+      .mockResolvedValueOnce(
+        Response.json({
+          permissions: [
+            {
+              id: 'P',
+              type: 'user',
+              role,
+              emailAddress: 'other@example.com',
+              permissionDetails: [{ inherited: true }],
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    await expect(provisionUser('token', 'H', 'alice', 'a@example.com')).rejects.toThrow(
+      'remediate the parent folder ACL',
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+  },
+);
+it('allows an inherited writer grant for the intended member without duplicating it', async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ files: [{ id: 'F' }] }))
+    .mockResolvedValueOnce(
+      Response.json({
+        permissions: [
+          {
+            id: 'P',
+            type: 'user',
+            role: 'writer',
+            emailAddress: 'a@example.com',
+            permissionDetails: [{ inherited: true }],
+          },
+        ],
+      }),
+    );
+  vi.stubGlobal('fetch', fetch);
+  await provisionUser('token', 'H', 'alice', 'a@example.com');
+  expect(fetch).toHaveBeenCalledTimes(2);
 });
