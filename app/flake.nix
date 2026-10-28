@@ -2,13 +2,38 @@
   description = "Hivemind — serverless shared team memory over MCP (app + local runtime)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  # 26.11 no longer supports Intel macOS; keep it on the supported Darwin branch.
+  inputs.nixpkgs-intel.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, nixpkgs-intel }:
     let
       # macOS only (Intel + Apple Silicon). Hivemind nodes are developer laptops.
       systems = [ "aarch64-darwin" "x86_64-darwin" ];
       forAllSystems =
-        f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
+        f: nixpkgs.lib.genAttrs systems (system:
+          f (import (if system == "x86_64-darwin" then nixpkgs-intel else nixpkgs) {
+            inherit system;
+            overlays = nixpkgs.lib.optional (system == "x86_64-darwin") (final: prev: {
+              pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [ (_: pythonPrev: {
+                # Backport the pgvector test-hook availability guard from our pinned
+                # unstable input (pkgs/development/python-modules/pgvector/default.nix).
+                # Its database test hook is Linux-only; imports remain checked.
+                pgvector = pythonPrev.pgvector.overridePythonAttrs (_: {
+                  doCheck = final.lib.meta.availableOn final.stdenv.buildPlatform final.postgresqlTestHook;
+                });
+                # datasets is used only by TestTrainFromIterators, already disabled
+                # upstream for network access. Avoid its broken Intel Arrow closure
+                # without disabling any additional tests or import checks.
+                tokenizers = pythonPrev.tokenizers.overridePythonAttrs (old: {
+                  nativeCheckInputs = final.lib.filter (dep: (dep.pname or "") != "datasets") old.nativeCheckInputs;
+                  postPatch = (old.postPatch or "") + ''
+                    substituteInPlace tests/documentation/test_tutorial_train_from_iterators.py \
+                      --replace-fail $'\nimport datasets\n' $'\n'
+                  '';
+                });
+              }) ];
+            });
+          }));
 
       # Runtime closure, all from nixpkgs (nothing hand-packaged — fastembed/onnx
       # substitute from the binary cache on darwin).
@@ -160,7 +185,7 @@ processes:
           devenvYaml = pkgs.writeText "devenv.yaml" ''
 inputs:
   nixpkgs:
-    url: github:NixOS/nixpkgs/nixpkgs-unstable
+    url: path:${pkgs.path}
 '';
           devenvProject = pkgs.runCommand "hivemind-devenv-project" { } ''
             mkdir -p $out
