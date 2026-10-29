@@ -44,14 +44,17 @@ async def test_cycles(fake_repo, identity, hive_root, make_record):  # type: ign
     for path in folder.glob("bad*"):
         path.unlink()
     await import_once(fake_repo, identity, hive_root, observer=state)
+    cycle = state.cycles["import"]
     success = cycle["last_success_at"]
     assert success is not None
     (hive_root / "roster.json").write_text("SECRET")
     with pytest.raises(ValueError):
         await import_once(fake_repo, replace(identity, roster=()), hive_root, observer=state)
+    cycle = state.cycles["import"]
     assert cycle["last_failure_category"] == "roster"
     assert cycle["last_success_at"] == success
     await import_once(fake_repo, identity, hive_root / "missing", observer=state)
+    cycle = state.cycles["import"]
     assert cycle["last_failure_category"] == "missing_mount"
     assert cycle["last_success_at"] == success
     await export_once(fake_repo, "alice", hive_root / "missing", observer=state)
@@ -270,3 +273,65 @@ async def test_guidance_keeps_late_categories_and_retained_retry_failure():  # t
     assert retry["recovery_guidance"] == [GUIDANCE["import"]]
     state.finish("import")
     assert (await state.snapshot(Counts()))["recovery_guidance"] == []
+
+
+async def test_path_contract_real_import(fake_repo, identity, hive_root):  # type: ignore[no-untyped-def]
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    class Counts:
+        async def sync_counts(self) -> tuple[int, int]:
+            return 7, 2
+
+    state = SyncStatus(True, clock=lambda: datetime(2026, 10, 29, tzinfo=UTC))
+    member = hive_root / "bob"
+    member.mkdir(exist_ok=True)
+    (member / "batch\\retry%\n雪.ndjson").write_text("broken\n")
+    folder = member
+    for _ in range(15):
+        folder /= "a" * 240
+    folder.mkdir(parents=True)
+    for i in range(20):
+        (folder / f"bad{i}.ndjson").write_text("broken\n")
+    await import_once(fake_repo, identity, hive_root, observer=state)
+    snapshot = await state.snapshot(Counts())
+    fixture = Path(__file__).parents[2] / "cli/test/fixtures/sync-path-status.json"
+    assert snapshot == json.loads(fixture.read_text())
+    assert snapshot["import"]["problem_count"] == 21
+    assert snapshot["import"]["problems"] == [
+        {"path": "bob/batch%5Cretry%25%0A%E9%9B%AA.ndjson", "reason": "parse"}
+    ]
+
+
+async def test_maximum_samples_fit_transport_and_are_detached():  # type: ignore[no-untyped-def]
+    from hivemind_app.sync_status import GUIDANCE
+
+    class Counts:
+        async def sync_counts(self) -> tuple[int, int]:
+            return 7, 2
+
+    state = SyncStatus(True)
+    for direction in ("import", "export"):
+        state.begin(direction)
+        for i in range(40):
+            state.problem(direction, list(GUIDANCE)[i % 7], "bob/" + "x" * 508)
+        state.finish(direction)
+    snapshot = await state.snapshot(Counts())
+    assert len(json.dumps(snapshot).encode()) < 64 * 1024
+    assert len(snapshot["import"]["problems"]) == 20
+    assert snapshot["export"]["problem_count"] == 40
+    snapshot["import"]["problems"][0]["reason"] = "mutated"
+    snapshot["export"]["problem_count"] = 0
+    assert await state.snapshot(Counts()) != snapshot
+    assert state.cycles["export"]["problem_count"] == 40
+    assert state.cycles["import"]["problems"][0]["reason"] == "missing_mount"
+
+
+def test_path_bytes_are_reversibly_encoded() -> None:
+    from urllib.parse import unquote_to_bytes
+
+    state = SyncStatus(True)
+    raw = b"bob/nonutf8-\xff.ndjson"
+    state.problem("import", "parse", raw.decode(errors="surrogateescape"))
+    path = state.cycles["import"]["problems"][0]["path"]
+    assert unquote_to_bytes(path) == raw

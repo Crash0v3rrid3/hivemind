@@ -567,7 +567,13 @@ Each cycle object contains `last_attempt_at` and `last_success_at` (UTC ISO 8601
 strings, null before an attempt/success), `last_failure_category` (null or a
 stable category string), `problem_count` (total failed/deferred files or cycle
 problems in the latest attempt), and `problems` (at most 20 objects with `path`
-relative to the hive root, or null for cycle failures, and `reason`). Categories
+relative to the hive root, or null for cycle failures, and `reason`). Paths use
+UTF-8 percent encoding (POSIX undecodable filename bytes are preserved), with
+`/` separators and unreserved ASCII characters left literal. Encoded paths are
+at most 512 ASCII bytes; longer path samples are omitted, while total problem
+counts, failure categories, and recovery guidance are retained. Thus the maximum
+40 samples across both cycles fit within the CLI's 64 KiB response cap. Consumers
+must not decode paths for terminal output without escaping control characters. Categories
 are `missing_mount`, `roster`, `read`, `parse`, `incomplete`, `import`, `export`.
 Starting a retry clears current problem samples but retains its previous failure category
 until clean completion, so an in-progress retry cannot falsely report recovery.

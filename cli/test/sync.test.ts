@@ -145,3 +145,32 @@ it('registers sync status alongside lifecycle status', () => {
   expect(program.commands.map((c) => c.name())).toEqual(['status', 'sync']);
   expect(program.commands[1].commands[0].name()).toBe('status');
 });
+
+it('displays the actual backend snapshot for long and unusual filenames', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const body = JSON.parse(
+    await readFile(new URL('./fixtures/sync-path-status.json', import.meta.url), 'utf8'),
+  );
+  configured(await serve(body));
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  expect(await runSyncStatus(true)).toBe(1);
+  expect(JSON.parse(log.mock.calls[0][0] as string)).toEqual(body);
+  expect(await runSyncStatus()).toBe(1);
+  const output = log.mock.calls.flat().join('\n');
+  expect(output).toContain('Sync health: degraded');
+  expect(output).toContain('Pending local exports: 7');
+  expect(output).toContain('problems 21');
+  expect(output).toContain('Recovery:');
+  expect(error).not.toHaveBeenCalled();
+});
+
+it('accepts the maximum sample payload within its transport cap', async () => {
+  const fullCycle = {
+    ...cycle,
+    problem_count: 20,
+    problems: Array(20).fill({ path: 'bob/' + 'x'.repeat(508), reason: 'parse' }),
+  };
+  const body = { ...status, health: 'degraded', import: fullCycle, export: fullCycle };
+  expect(await fetchSyncStatus(await serve(body))).toEqual(body);
+});

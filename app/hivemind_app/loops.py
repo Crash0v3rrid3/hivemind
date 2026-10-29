@@ -292,8 +292,8 @@ async def export_once(
             repo, owner_handle, hive_root, clock=clock, uuid_factory=uuid_factory
         )
     except Exception:
-        if observer and not observer.cycles["export"]["problem_count"]:
-            observer.problem("export", "export")
+        if observer:
+            observer.fail_if_unreported("export", "export")
         raise
     if observer:
         observer.finish("export")
@@ -313,8 +313,8 @@ async def import_once(
     try:
         result = await _import_once(repo, identity, hive_root, observer)
     except Exception:
-        if observer and not observer.cycles["import"]["problem_count"]:
-            observer.problem("import", "import")
+        if observer:
+            observer.fail_if_unreported("import", "import")
         raise
     if observer:
         observer.finish("import")

@@ -56,7 +56,7 @@ function cycle(value: unknown): boolean {
         object(p, ['path', 'reason']) &&
         CATEGORIES.includes(p.reason as string) &&
         (p.path === null ||
-          (text(p.path, 4096) &&
+          (text(p.path, 512) &&
             !p.path.startsWith('/') &&
             !p.path.includes('\\') &&
             !p.path.split('/').includes('..') &&
