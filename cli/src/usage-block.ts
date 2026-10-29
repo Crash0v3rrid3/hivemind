@@ -30,7 +30,9 @@ is required and unreachable, and to run \`npx -y @crash0v3rrid3/hivemind up\` (f
 takes ~60-90s), then retry.
 
 ### Search before you work
-Before starting a task, search first so you don't redo work or re-hit a known wall:
+Before starting a task, call \`memory_context(task, jira_project, jira_ticket)\` to read
+relevant source excerpts within an approximate token budget. This read does not write
+memories automatically. Then search further so you don't redo work or re-hit a known wall:
 \`memory_list_recent\` (with \`jira_ticket\`), \`memory_search\` (semantic — phrase it as the problem
 you're facing), and a filtered \`memory_list_recent\` on open blockers.
 

@@ -1,0 +1,271 @@
+{
+  "memories": [
+    {
+      "id": "m01",
+      "title": "SQLite decision",
+      "body": "Use embedded storage for portable local persistence.",
+      "event_type": "decision",
+      "topic": "database"
+    },
+    {
+      "id": "d01",
+      "title": "database unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m02",
+      "title": "Deployment blocker",
+      "body": "Waiting for permission from the infrastructure owner.",
+      "event_type": "blocker",
+      "topic": "permissions"
+    },
+    {
+      "id": "d02",
+      "title": "permissions unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m03",
+      "title": "src/sync_retry.py retry policy",
+      "body": "Exponential backoff limits failed sync attempts.",
+      "event_type": "decision",
+      "topic": "retry"
+    },
+    {
+      "id": "d03",
+      "title": "retry unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m04",
+      "title": "AUTH-317 authentication fix",
+      "body": "Rotate expired credentials before login.",
+      "event_type": "update",
+      "topic": "auth"
+    },
+    {
+      "id": "d04",
+      "title": "auth unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m05",
+      "title": "invalidate_cache implementation",
+      "body": "Evict stale entries after writes.",
+      "event_type": "update",
+      "topic": "cache"
+    },
+    {
+      "id": "d05",
+      "title": "cache unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m06",
+      "title": "migrations/004.sql schema change",
+      "body": "Add the audit index.",
+      "event_type": "decision",
+      "topic": "schema"
+    },
+    {
+      "id": "d06",
+      "title": "schema unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m07",
+      "title": "Latency optimization",
+      "body": "Batch requests to reduce latency.",
+      "event_type": "decision",
+      "topic": "latency"
+    },
+    {
+      "id": "d07",
+      "title": "latency unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m08",
+      "title": "Outage recovery",
+      "body": "Restart the worker after a service interruption.",
+      "event_type": "blocker",
+      "topic": "outage"
+    },
+    {
+      "id": "d08",
+      "title": "outage unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m09",
+      "title": "Backup retention",
+      "body": "Keep daily backups for thirty days.",
+      "event_type": "decision",
+      "topic": "backup"
+    },
+    {
+      "id": "d09",
+      "title": "backup unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m10",
+      "title": "QUEUE-42 queue congestion",
+      "body": "Bound the pending work backlog.",
+      "event_type": "blocker",
+      "topic": "queue"
+    },
+    {
+      "id": "d10",
+      "title": "queue unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m11",
+      "title": "normalize_identifier normalization",
+      "body": "Normalize Unicode before matching identifiers.",
+      "event_type": "update",
+      "topic": "unicode"
+    },
+    {
+      "id": "d11",
+      "title": "unicode unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    },
+    {
+      "id": "m12",
+      "title": "Context token budget",
+      "body": "Trim source excerpts to fit the serialized estimate.",
+      "event_type": "decision",
+      "topic": "budget"
+    },
+    {
+      "id": "d12",
+      "title": "budget unrelated proposal",
+      "body": "Unapproved brainstorming; no implementation or policy evidence.",
+      "event_type": "update",
+      "topic": "distractor"
+    }
+  ],
+  "queries": [
+    {
+      "text": "Why choose SQLite?",
+      "relevant": [
+        "m01"
+      ],
+      "topic": "database",
+      "exact_identifier": false
+    },
+    {
+      "text": "What blocks deployment?",
+      "relevant": [
+        "m02"
+      ],
+      "topic": "permissions",
+      "exact_identifier": false
+    },
+    {
+      "text": "src/sync_retry.py",
+      "relevant": [
+        "m03"
+      ],
+      "topic": "distractor",
+      "exact_identifier": true,
+      "literal_rescue": true
+    },
+    {
+      "text": "AUTH-317",
+      "relevant": [
+        "m04"
+      ],
+      "topic": "auth",
+      "exact_identifier": true
+    },
+    {
+      "text": "invalidate_cache",
+      "relevant": [
+        "m05"
+      ],
+      "topic": "cache",
+      "exact_identifier": true
+    },
+    {
+      "text": "migrations/004.sql",
+      "relevant": [
+        "m06"
+      ],
+      "topic": "schema",
+      "exact_identifier": true
+    },
+    {
+      "text": "How do we reduce response time?",
+      "relevant": [
+        "m07"
+      ],
+      "topic": "latency",
+      "exact_identifier": false
+    },
+    {
+      "text": "How do we recover service availability?",
+      "relevant": [
+        "m08"
+      ],
+      "topic": "outage",
+      "exact_identifier": false
+    },
+    {
+      "text": "How are snapshots retained?",
+      "relevant": [
+        "m09"
+      ],
+      "topic": "backup",
+      "exact_identifier": false
+    },
+    {
+      "text": "QUEUE-42",
+      "relevant": [
+        "m10"
+      ],
+      "topic": "queue",
+      "exact_identifier": true
+    },
+    {
+      "text": "normalize_identifier",
+      "relevant": [
+        "m11"
+      ],
+      "topic": "unicode",
+      "exact_identifier": true
+    },
+    {
+      "text": "How is context size bounded?",
+      "relevant": [
+        "m12"
+      ],
+      "topic": "budget",
+      "exact_identifier": false
+    }
+  ]
+}

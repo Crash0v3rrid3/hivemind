@@ -1,0 +1,32 @@
+{
+  "service": "hivemind",
+  "health": "degraded",
+  "telemetry_started_at": "2026-10-29T00:00:00+00:00",
+  "loops_enabled": true,
+  "remote_delivery": "unknown",
+  "pending_local_exports": 7,
+  "quarantined_ids": 2,
+  "import": {
+    "last_attempt_at": "2026-10-29T00:00:00+00:00",
+    "last_success_at": null,
+    "last_failure_category": "parse",
+    "problem_count": 21,
+    "problems": [
+      {
+        "path": "bob/batch%5Cretry%25%0A%E9%9B%AA.ndjson",
+        "reason": "parse"
+      }
+    ]
+  },
+  "export": {
+    "last_attempt_at": null,
+    "last_success_at": null,
+    "last_failure_category": null,
+    "problem_count": 0,
+    "problems": []
+  },
+  "recovery_guidance": [
+    "Inspect conflicting UUID evidence with the publisher; preserve evidence.",
+    "Check the published NDJSON format with its publisher; retry after repair."
+  ]
+}

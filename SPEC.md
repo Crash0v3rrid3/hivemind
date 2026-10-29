@@ -1,9 +1,9 @@
 # Hivemind — Implementation Spec (build contract)
 
 Hivemind is a **serverless, append-only, semantically-searchable shared team memory** exposed
-over **MCP**. Every developer runs an identical **local** stack (Docker Compose); nodes sync by
+over **MCP**. Every developer runs a **local** stack (Docker Compose or native Nix); nodes sync by
 exchanging **immutable NDJSON files** through one shared **Google Drive** folder (`hivemind/`)
-mounted with FUSE. Each node holds the whole team's memory in its own local Postgres.
+mounted with FUSE. Each node holds the whole team's memory in its own local SQLite + sqlite-vec or Postgres + pgvector database.
 
 This document is the single source of truth for the implementation, kept in sync with the as-built code. The Mermaid diagrams below show the node architecture, the record lifecycle, and the cross-node sync flow.
 
@@ -24,7 +24,7 @@ hivemind/
       schemas.py               # Pydantic v2 request/response models (NO identity fields)
       embeddings.py            # Embedder protocol + real (fastembed / onnxruntime, no torch) + FakeEmbedder
       serialization.py         # NDJSON (de)serialize, atomic write, tolerant parse, folder->author
-      repository.py            # async CRUD over Postgres (append-only), hidden-id computation
+      repository.py            # async CRUD over SQLite/Postgres (append-only), hidden-id computation
       service.py               # MemoryService: add/update/delete/get/list/search/history + daily_summary
       loops.py                 # export loop + import loop (filesystem <-> DB)
       mcp_server.py            # FastMCP tools + FastAPI mount + lifespan (schema init, start loops)
@@ -86,7 +86,7 @@ background loops). Nodes never talk directly; they exchange immutable files via 
 ```mermaid
 flowchart LR
   agent["Claude / MCP client"]
-  subgraph Node["One developer node — Docker Compose"]
+  subgraph Node["One developer node — Docker Compose or Nix"]
     direction TB
     app["app: FastMCP server<br/>+ export & import loops"]
     pg[("postgres + pgvector<br/>local_events · team_events · ingested_files")]
@@ -301,6 +301,21 @@ sequenceDiagram
   in SQL before exact distance ranking and limits; merge and return top_k. Result
   limits are strict integers from 1 to 1000. Daily summaries date-filter before aggregation.
 
+- `memory_search` defaults to semantic; explicit `keyword` and `hybrid` modes preserve
+  the same list-of-public-records response. Invalid modes fail through MCP validation.
+- Keyword search is lexical substring term matching, **not BM25**: queries are ASCII-lower
+  normalized, deduplicated and bounded to 32 terms, retaining code identifiers,
+  paths and tickets. SQL lowercases both stored fields and patterns; Unicode case behavior is backend-dependent
+  (SQLite lower is ASCII-only). Non-ASCII identifiers are preserved literally. Per-term title/body/ticket/tag matches
+  weigh 4/1/8/3; repeated occurrences do not increase the score. Literal `%`, `_` and
+  backslashes are escaped parameters, never query syntax. Keyword mode never embeds.
+- Hybrid fetches `max(200, top_k)` eligible candidates per channel and applies equal-weight
+  reciprocal rank fusion with constant 60 and one contribution per ID per channel.
+  Lexical-only hits survive fusion. All rankings break ties by record ID ascending;
+  visibility and requested filters apply before each channel's ranking and limit.
+  Internal `ranked_search` returns record, fused score and matched channels for context
+  consumers; embeddings and arbitrary metadata are never added to public search output.
+
 ---
 
 ## 9. MCP tools (FastMCP, streamable HTTP at MCP_HOST:MCP_PORT/mcp)
@@ -313,7 +328,7 @@ All writes are authored as `OWNER_HANDLE` from config — author is NEVER taken 
 - `memory_delete(id)`  (own records only)
 - `memory_get(id)`
 - `memory_list_recent(limit=50, author=None, event_type=None, status=None, jira_project=None, jira_ticket=None, date_from=None, date_to=None, tags=None)`
-- `memory_search(query, top_k=20, <same filters>)`
+- `memory_search(query, top_k=20, <same filters>, mode="semantic")`
 - `memory_history(id)`
 - `memory_daily_summary(day=None, author=None)`
 - `me()` -> OWNER_HANDLE ; `author_list()` -> roster
@@ -343,7 +358,7 @@ mcp_port          = 7777
 # export_interval_sec = 60
 # import_interval_sec = 60
 # embeddings          = true   # true = real BAAI embedder (fastembed/onnx); false = fake (instant)
-# image_tag           = "0.2.0"
+# image_tag           = "0.3.0"
 ```
 
 Keys: `username` (required; -> OWNER_HANDLE; handle regex `^[a-z0-9][a-z0-9._-]*$`);
@@ -503,3 +518,68 @@ tests that need Postgres are marked and SKIP automatically when it is unavailabl
 - Root `Makefile` targets: `fmt`, `lint`, `typecheck`, `test`, `check` (all), delegating into both
   packages. `check` must pass on a clean checkout for the unit layer.
 - `.claude/CLAUDE.md`: concise repo guide (architecture, invariants from §14, layout, commands).
+
+### Task context packs
+
+Before work, call `memory_context(task, jira_project=None, jira_ticket=None,
+ token_budget=2000, max_items=12)` to read relevant sources. It performs hybrid
+retrieval over up to 200 ranked candidates using existing visibility and project/
+ticket filters; there is no repository filter. It never writes automatically.
+Task must be nonblank and at most 10,000 characters. Budget and item limits are
+strict integers (256–16,000 and 1–50). A task that cannot fit the response envelope
+raises a validation error.
+
+The pack includes task, source items, estimated_tokens, token_budget, truncated,
+and budget_method. Each item attributes source_id, author, event_type, status,
+title, timestamp, retrieval channels and reason; excerpts contain only original
+body prefixes. No embeddings or arbitrary metadata are exposed. Identical titles
+and bodies (NFKC, casefold, collapsed whitespace) are deduplicated, keeping the
+first in deterministic relevance order, with ID ties inherited from retrieval.
+Categories explain relevance without overriding ranking. Oversized items may be
+omitted; excerpts are shortened at Unicode character boundaries. `truncated`
+indicates budget or max_items omissions within the candidate window.
+
+The estimator is ceil(UTF-8 bytes / 4) over the **entire pack JSON**, including
+all envelope fields and the estimate itself, with two-space indentation and
+unescaped Unicode, matching MCP text serialization. It is approximate, **not a
+tokenizer guarantee**; clients that reserialize should use the documented format
+when comparing the estimate. Very long titles may leave no room for an item.
+
+### Local sync status
+
+`GET /sync/status` and the zero-argument MCP tool `memory_sync_status()` return
+identical local observations. Status queries perform database aggregate counts,
+never filesystem scans. This per-process telemetry resets on restart.
+
+| Field | Type / meaning |
+| --- | --- |
+| `service` | string, always `hivemind` |
+| `health` | `unknown` before both directions have completed clean cycles, `ok` after clean cycles, `degraded` while a cycle has problems, its failed outcome awaits a clean retry, or quarantine is nonempty |
+| `telemetry_started_at` | UTC ISO 8601 string |
+| `loops_enabled` | boolean, whether this process starts background loops |
+| `remote_delivery` | string, always `unknown`; no peer acknowledgement is inferred |
+| `pending_local_exports` | nonnegative integer; exact unpublished local row count, including conflict evidence, independent of export batch limit |
+| `quarantined_ids` | nonnegative integer; exact quarantined UUID count |
+| `import`, `export` | cycle objects described below |
+| `recovery_guidance` | bounded list of fixed recovery strings for current problem categories and conflicts |
+
+Each cycle object contains `last_attempt_at` and `last_success_at` (UTC ISO 8601
+strings, null before an attempt/success), `last_failure_category` (null or a
+stable category string), `problem_count` (total failed/deferred files or cycle
+problems in the latest attempt), and `problems` (at most 20 objects with `path`
+relative to the hive root, or null for cycle failures, and `reason`). Paths use
+UTF-8 percent encoding (POSIX undecodable filename bytes are preserved), with
+`/` separators and unreserved ASCII characters left literal. Encoded paths are
+at most 512 ASCII bytes; longer path samples are omitted, while total problem
+counts, failure categories, and recovery guidance are retained. Thus the maximum
+40 samples across both cycles fit within the CLI's 64 KiB response cap. Consumers
+must not decode paths for terminal output without escaping control characters. Categories
+are `missing_mount`, `roster`, `read`, `parse`, `incomplete`, `import`, `export`.
+Starting a retry clears current problem samples but retains its previous failure category
+until clean completion, so an in-progress retry cannot falsely report recovery.
+A clean completed attempt clears the failure category; partial imports never
+advance `last_success_at`. Missing roots and invalid/unreadable rosters never
+count as successful cycles. An absent optional roster retains folder discovery
+semantics. Publication success means writing local immutable files and marking
+local rows exported; it says nothing about delivery to another device.
+No exceptions, credentials, record content, or absolute hive paths are included.

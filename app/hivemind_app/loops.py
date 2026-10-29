@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
@@ -35,6 +36,7 @@ from .serialization import (
     serialize_records,
 )
 from .service import RepositoryLike
+from .sync_status import SyncStatus
 
 log = structlog.get_logger(__name__)
 
@@ -72,7 +74,7 @@ def _now(clock: Callable[[], datetime] | None) -> datetime:
 # ---------------------------------------------------------------------------
 
 
-async def export_once(
+async def _export_once(
     repo: ExportRepository,
     owner_handle: str,
     hive_root: str | Path,
@@ -154,22 +156,34 @@ def _member_folders(hive_root: Path, identity: Identity) -> list[Path]:
     return folders
 
 
-def _ndjson_files(folder: Path) -> list[Path]:
-    """All published NDJSON files under a member folder (recursively)."""
-    return sorted(
-        p
-        for p in folder.rglob("*.ndjson")
-        if p.is_file()
-        and not p.is_symlink()
-        and p.resolve().is_relative_to(folder.resolve())
-        and is_ndjson_file(p.name)
-    )
+def _ndjson_files(folder: Path, on_error: Callable[[OSError], None] | None = None) -> list[Path]:
+    """Discover published files without suppressing unreadable subtree errors."""
+
+    def traversal_error(error: OSError) -> None:
+        if on_error is None:
+            raise error
+        on_error(error)
+
+    files: list[Path] = []
+    for directory, subdirs, names in os.walk(folder, onerror=traversal_error):
+        subdirs[:] = [name for name in subdirs if not (Path(directory) / name).is_symlink()]
+        for name in names:
+            path = Path(directory) / name
+            if (
+                is_ndjson_file(name)
+                and not path.is_symlink()
+                and path.is_file()
+                and path.resolve().is_relative_to(folder.resolve())
+            ):
+                files.append(path)
+    return sorted(files)
 
 
-async def import_once(
+async def _import_once(
     repo: ImportRepository,
     identity: Identity,
     hive_root: str | Path,
+    observer: SyncStatus | None = None,
 ) -> int:
     """Import peer files and recover the owner's published local history.
 
@@ -177,7 +191,16 @@ async def import_once(
     Idempotent: already-ingested files are skipped; re-running inserts nothing.
     """
     root = Path(hive_root)
-    identity = await asyncio.to_thread(resolve_roster, identity, root)
+    if not await asyncio.to_thread(root.is_dir):
+        if observer:
+            observer.problem("import", "missing_mount")
+        return 0
+    try:
+        identity = await asyncio.to_thread(resolve_roster, identity, root)
+    except Exception:
+        if observer:
+            observer.problem("import", "roster")
+        raise
     inserted_total = 0
 
     # Fetch the whole ingested set ONCE per cycle instead of a DB point lookup
@@ -187,9 +210,17 @@ async def import_once(
 
     for folder in await asyncio.to_thread(_member_folders, root, identity):
         author = folder.name
+
+        def traversal_error(error: OSError, current_folder: Path = folder) -> None:
+            if observer:
+                failed_path = Path(error.filename) if error.filename else current_folder
+                observer.problem("import", "read", failed_path.relative_to(root).as_posix())
+
         try:
-            files = await asyncio.to_thread(_ndjson_files, folder)
+            files = await asyncio.to_thread(_ndjson_files, folder, traversal_error)
         except OSError as exc:
+            if observer:
+                observer.problem("import", "read", folder.relative_to(root).as_posix())
             log.warning("hivemind.import.folder_error", path=str(folder), error=str(exc))
             continue
         for file_path in files:
@@ -201,12 +232,18 @@ async def import_once(
             try:
                 text = await asyncio.to_thread(file_path.read_text, encoding="utf-8")
             except (OSError, UnicodeError) as exc:  # pragma: no cover - filesystem race
+                if observer:
+                    observer.problem("import", "read", rel)
                 log.warning("hivemind.import.read_error", path=rel, error=str(exc))
                 continue  # transient; retried next cycle (not marked)
 
             try:
                 records = await asyncio.to_thread(parse_ndjson, text, require_complete=True)
             except Exception as exc:
+                if observer:
+                    observer.problem(
+                        "import", "incomplete" if not text.endswith("\n") else "parse", rel
+                    )
                 log.warning("hivemind.import.parse_error", path=rel, error=str(exc))
                 continue  # retried next cycle (not marked)
 
@@ -216,6 +253,8 @@ async def import_once(
             try:
                 inserted = await repo.import_file(stamped, rel, own=author == identity.owner_handle)
             except Exception as exc:
+                if observer:
+                    observer.problem("import", "import", rel)
                 log.warning("hivemind.import.persistence_error", path=rel, error=str(exc))
                 continue
             ingested.add(rel)
@@ -228,6 +267,58 @@ async def import_once(
             )
 
     return inserted_total
+
+
+async def export_once(
+    repo: ExportRepository,
+    owner_handle: str,
+    hive_root: str | Path,
+    *,
+    clock: Callable[[], datetime] | None = None,
+    uuid_factory: Callable[[], uuid.UUID] = uuid.uuid4,
+    observer: SyncStatus | None = None,
+) -> list[str]:
+    """Publish pending local rows; return written paths, preserving retry semantics."""
+    if observer:
+        observer.begin("export")
+    try:
+        if observer:
+            mount_ready = await asyncio.to_thread(
+                lambda: Path(hive_root).is_dir() and (Path(hive_root) / owner_handle).is_dir()
+            )
+            if not mount_ready:
+                observer.problem("export", "missing_mount")
+        result = await _export_once(
+            repo, owner_handle, hive_root, clock=clock, uuid_factory=uuid_factory
+        )
+    except Exception:
+        if observer:
+            observer.fail_if_unreported("export", "export")
+        raise
+    if observer:
+        observer.finish("export")
+    return result
+
+
+async def import_once(
+    repo: ImportRepository,
+    identity: Identity,
+    hive_root: str | Path,
+    *,
+    observer: SyncStatus | None = None,
+) -> int:
+    """Import available immutable files; return newly inserted record count."""
+    if observer:
+        observer.begin("import")
+    try:
+        result = await _import_once(repo, identity, hive_root, observer)
+    except Exception:
+        if observer:
+            observer.fail_if_unreported("import", "import")
+        raise
+    if observer:
+        observer.finish("import")
+    return result
 
 
 def _with_author(record: EventRecord, author: str) -> EventRecord:
@@ -248,12 +339,13 @@ async def run_export_loop(
     *,
     clock: Callable[[], datetime] | None = None,
     stop_event: asyncio.Event | None = None,
+    observer: SyncStatus | None = None,
 ) -> None:
     """Run :func:`export_once` every ``interval_sec`` until stopped."""
     stop = stop_event or asyncio.Event()
     while not stop.is_set():
         try:
-            await export_once(repo, owner_handle, hive_root, clock=clock)
+            await export_once(repo, owner_handle, hive_root, clock=clock, observer=observer)
         except Exception:
             log.exception("hivemind.export.loop_error")
         await _sleep_or_stop(interval_sec, stop)
@@ -266,12 +358,13 @@ async def run_import_loop(
     interval_sec: int,
     *,
     stop_event: asyncio.Event | None = None,
+    observer: SyncStatus | None = None,
 ) -> None:
     """Run :func:`import_once` every ``interval_sec`` until stopped."""
     stop = stop_event or asyncio.Event()
     while not stop.is_set():
         try:
-            await import_once(repo, identity, hive_root)
+            await import_once(repo, identity, hive_root, observer=observer)
         except Exception:
             log.exception("hivemind.import.loop_error")
         await _sleep_or_stop(interval_sec, stop)

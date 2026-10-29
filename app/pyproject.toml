@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hivemind-app"
-version = "0.2.0"
+version = "0.3.0"
 description = "Hivemind — serverless, append-only, semantically-searchable shared team memory over MCP"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -110,3 +110,7 @@ clean: ## Remove generated venv / node_modules / caches
 	rm -rf $(CLI_DIR)/node_modules
 	find $(APP_DIR) -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 	rm -rf $(APP_DIR)/.pytest_cache $(APP_DIR)/.ruff_cache $(APP_DIR)/.mypy_cache
+
+.PHONY: eval-retrieval
+eval-retrieval: app-deps ## Offline SQLite retrieval regression evaluation
+	PYTHONPATH=$(APP_DIR) $(PY) -m hivemind_app.evaluate_retrieval

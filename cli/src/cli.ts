@@ -14,6 +14,7 @@ import { register as registerLifecycle } from './commands/lifecycle.js';
 import { register as registerDoctor } from './commands/doctor.js';
 import { register as registerInstall } from './commands/install.js';
 import { register as registerUninstall } from './commands/uninstall.js';
+import { register as registerSync } from './commands/sync.js';
 import { register as registerAdmin } from './commands/admin.js';
 
 function buildProgram(): Command {
@@ -31,6 +32,7 @@ function buildProgram(): Command {
   registerInstall(program);
   registerUninstall(program);
   registerAdmin(program);
+  registerSync(program);
 
   program.showHelpAfterError();
   return program;

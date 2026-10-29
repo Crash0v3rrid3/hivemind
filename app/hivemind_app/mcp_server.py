@@ -30,10 +30,12 @@ from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from .config import Identity, Settings
+from .context import memory_context as build_context
 from .db import create_engine, create_sessionmaker
 from .embeddings import Embedder, resolve_embedder
 from .loops import run_export_loop, run_import_loop
 from .repository import Repository, init_schema
+from .retrieval import SearchMode
 from .schemas import (
     MAX_BODY_LENGTH,
     MAX_QUERY_LENGTH,
@@ -47,6 +49,7 @@ from .schemas import (
 )
 from .serialization import EventRecord
 from .service import MAX_READ_LIMIT, MemoryService
+from .sync_status import SyncStatus
 
 log = structlog.get_logger(__name__)
 
@@ -77,7 +80,11 @@ class StrictFastMCP(FastMCP):
         return await super().call_tool(name, arguments)
 
 
-def _build_mcp(service: MemoryService) -> FastMCP:
+def _build_mcp(
+    service: MemoryService,
+    sync_status: SyncStatus | None = None,
+    sync_repo: Repository | None = None,
+) -> FastMCP:
     """Register all MCP tools against ``service`` and return the FastMCP app."""
     mcp: FastMCP = StrictFastMCP("hivemind")
 
@@ -182,8 +189,9 @@ def _build_mcp(service: MemoryService) -> FastMCP:
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         tags: Annotated[list[Tag] | None, Field(max_length=MAX_TAGS)] = None,
+        mode: SearchMode = "semantic",
     ) -> list[dict[str, Any]]:
-        """Semantic search over the whole team's memory."""
+        """Semantic, keyword, or hybrid search over the team memory."""
         filters = SearchFilters(
             author=author,
             event_type=event_type,
@@ -194,8 +202,21 @@ def _build_mcp(service: MemoryService) -> FastMCP:
             date_to=date_to,
             tags=tags,
         )
-        records = await service.search(query, top_k=top_k, filters=filters)
+        records = await service.search(query, top_k=top_k, filters=filters, mode=mode)
         return [_public(r) for r in records]
+
+    @mcp.tool()
+    async def memory_context(
+        task: Annotated[str, Field(min_length=1, max_length=MAX_QUERY_LENGTH)],
+        jira_project: str | None = None,
+        jira_ticket: str | None = None,
+        token_budget: Annotated[int, Field(ge=256, le=16000, strict=True)] = 2000,
+        max_items: Annotated[int, Field(ge=1, le=50, strict=True)] = 12,
+    ) -> dict[str, Any]:
+        """Read source excerpts before work; byte/4 estimates are not tokenizer guarantees."""
+        return await build_context(
+            service, task, jira_project, jira_ticket, token_budget, max_items
+        )
 
     @mcp.tool()
     async def memory_history(id: str) -> list[dict[str, Any]]:
@@ -219,6 +240,13 @@ def _build_mcp(service: MemoryService) -> FastMCP:
     async def author_list() -> list[str]:
         """Return the configured roster of member handles."""
         return list(service.roster)
+
+    if sync_status is not None and sync_repo is not None:
+
+        @mcp.tool()
+        async def memory_sync_status() -> dict[str, Any]:
+            """Local publication/import observations; peer delivery is unknown."""
+            return await sync_status.snapshot(sync_repo)
 
     return mcp
 
@@ -250,7 +278,8 @@ def create_app(
     service = MemoryService(repo, emb, identity, clock=clock, embedding_model=cfg.embedding_model)
     root = hive_root if hive_root is not None else cfg.hivemind_path
 
-    mcp = _build_mcp(service)
+    sync_status = SyncStatus(start_loops, clock)
+    mcp = _build_mcp(service, sync_status, repo)
     mcp_app = mcp.streamable_http_app()
 
     @asynccontextmanager
@@ -276,6 +305,7 @@ def create_app(
                             cfg.export_interval_sec,
                             clock=clock,
                             stop_event=stop,
+                            observer=sync_status,
                         )
                     ),
                     asyncio.create_task(
@@ -285,6 +315,7 @@ def create_app(
                             root,
                             cfg.import_interval_sec,
                             stop_event=stop,
+                            observer=sync_status,
                         )
                     ),
                 ]
@@ -306,6 +337,10 @@ def create_app(
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"service": "hivemind", "status": "ok", "owner": cfg.owner_handle}
+
+    @app.get("/sync/status")
+    async def status() -> dict[str, Any]:
+        return await sync_status.snapshot(repo)
 
     app.mount("/", mcp_app)
     return app

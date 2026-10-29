@@ -52,6 +52,7 @@ Secrets never live in this file — the Drive OAuth token lives only in
 | `config [--edit\|--print]` | validate/show resolved config, or edit the conf |
 | `setup` | rclone remote + generate `~/.hivemind` derived files |
 | `up` / `down` / `status` / `logs` | Docker Compose lifecycle (`up` regenerates first) |
+| `sync status [--json]` | local pending exports, quarantine and cycle observations |
 | `doctor` | health checks incl. can-write-own / cannot-write-peer |
 | `install-usage-instructions` | marker block into `~/.claude/CLAUDE.md` |
 | `install-mcp-server` | http entry into `~/.claude.json` |
@@ -59,6 +60,21 @@ Secrets never live in this file — the Drive OAuth token lives only in
 | `guard` | probe the MCP endpoint (exit non-zero if down) |
 | `install` | one-shot of all of the above |
 | `admin provision-user <handle> <email>` | create + share the member's Drive folder |
+
+
+### Inspect local sync
+
+Run `hivemind sync status` (or `npx -y @crash0v3rrid3/hivemind sync status`)
+to inspect pending local exports, quarantined IDs and import/export cycle health.
+Use `hivemind sync status --json` for the validated server response. The command
+reads only the configured localhost MCP port, with a five-second timeout.
+Degraded sync and unreachable/invalid endpoints exit 1; healthy or unknown status
+exits 0. Unknown means clean cycles have not yet completed in both directions,
+even if no exports are pending. Telemetry covers this app process since startup
+and resets on restart. Remote delivery is always unknown: local publication
+does not prove another device received it. `hivemind status` continues to show
+service lifecycle status. For failures, check `hivemind logs` and the recovery
+guidance displayed by sync status.
 
 ### Enforcement guard
 
