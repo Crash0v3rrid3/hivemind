@@ -22,12 +22,17 @@ from typing import Any, cast
 from sqlalchemy import (
     CursorResult,
     LargeBinary,
+    String,
+    case,
     func,
     literal,
     or_,
     select,
     text,
     update,
+)
+from sqlalchemy import (
+    cast as sql_cast,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -37,6 +42,7 @@ from sqlalchemy.orm import aliased
 from .config import DEFAULT_EMBEDDING_DIM
 from .db import Base
 from .models import ConflictedEvent, IngestedFile, LocalEvent, StateBinding, TeamEvent
+from .retrieval import like_pattern, query_terms
 from .schemas import SearchFilters
 from .serialization import EventRecord, record_to_dict, validate_embedding
 
@@ -291,6 +297,15 @@ class Repository:
             rows = (await session.execute(select(IngestedFile.path))).scalars().all()
             return set(rows)
 
+    async def sync_counts(self) -> tuple[int, int]:
+        """Exact local publication backlog and quarantined UUID counts (no scan)."""
+        async with self._sessionmaker() as session:
+            pending = await session.scalar(
+                select(func.count()).select_from(LocalEvent).where(LocalEvent.exported_at.is_(None))
+            )
+            conflicts = await session.scalar(select(func.count()).select_from(ConflictedEvent))
+            return int(pending or 0), int(conflicts or 0)
+
     async def list_unexported_local(self) -> list[EventRecord]:
         """Return at most 1000 unpublished local records, including conflict evidence.
 
@@ -433,6 +448,65 @@ class Repository:
                     records.append(self._record(row))
         records.sort(key=lambda r: (r.ts, str(r.id)), reverse=True)
         return records if pool is None else records[:pool]
+
+    async def keyword_candidates(
+        self, query: str, pool: int, *, filters: SearchFilters | None = None
+    ) -> list[tuple[EventRecord, float]]:
+        """Weighted substring term matches, filtered in SQL before ranking and LIMIT.
+
+        Title/ticket/tag/body matches weigh 4/8/3/1 per distinct query term.
+        No corpus materialization, embedding call, or backend full-text extension.
+        """
+        terms = query_terms(query)
+        if not terms:
+            return []
+        hits: list[tuple[EventRecord, float]] = []
+        async with self._sessionmaker() as session:
+            for model in _EVENT_TABLES:
+                fields = ((model.title, 4), (model.body, 1), (model.jira_ticket, 8))
+                scores: list[Any] = []
+                for term in terms:
+                    pattern = func.lower(literal(like_pattern(term)))
+                    for field, weight in fields:
+                        scores.append(
+                            case((func.lower(field).like(pattern, escape="\\"), weight), else_=0)
+                        )
+                    if self._is_sqlite:
+                        tags = func.json_each(model.tags).table_valued("value")
+                        tag_match = (
+                            select(tags.c.value)
+                            .where(func.lower(tags.c.value).like(pattern, escape="\\"))
+                            .correlate(model)
+                            .exists()
+                        )
+                    else:
+                        tags = func.unnest(model.tags).table_valued("value").render_derived()
+                        tag_match = (
+                            select(tags.c.value)
+                            .where(
+                                func.lower(sql_cast(tags.c.value, String)).like(
+                                    pattern, escape="\\"
+                                )
+                            )
+                            .correlate(model)
+                            .exists()
+                        )
+                    scores.append(case((tag_match, 3), else_=0))
+                score = sum(scores)
+                stmt = (
+                    select(model, score.label("score"))
+                    .where(
+                        *self._visible_conditions(model),
+                        *self._filter_conditions(model, filters),
+                        score > 0,
+                    )
+                    .order_by(score.desc(), model.id.asc())
+                    .limit(pool)
+                )
+                for row in (await session.execute(stmt)).all():
+                    hits.append((self._record(row[0]), float(row[1])))
+        hits.sort(key=lambda hit: (-hit[1], str(hit[0].id)))
+        return hits[:pool]
 
     async def nearest_candidates(
         self, query_vec: list[float], pool: int, *, filters: SearchFilters | None = None

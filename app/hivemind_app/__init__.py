@@ -5,4 +5,4 @@ over MCP. This package hosts the MCP server and the export/import loops that
 sync immutable NDJSON files through a shared Google Drive folder.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

@@ -21,6 +21,7 @@ from typing import Protocol
 
 from .config import Identity
 from .embeddings import Embedder, build_embedding_text, zero_vector
+from .retrieval import RankedHit, SearchMode, query_terms, reciprocal_rank_fusion
 from .schemas import MAX_QUERY_LENGTH, MemoryAddRequest, MemoryUpdateRequest, SearchFilters
 from .serialization import EventRecord, day_bucket
 
@@ -62,6 +63,10 @@ class RepositoryLike(Protocol):
 
     async def nearest_candidates(
         self, query_vec: list[float], pool: int, *, filters: SearchFilters | None = None
+    ) -> list[tuple[EventRecord, float]]: ...
+
+    async def keyword_candidates(
+        self, query: str, pool: int, *, filters: SearchFilters | None = None
     ) -> list[tuple[EventRecord, float]]: ...
 
     async def history_chain(self, event_id: uuid.UUID) -> list[EventRecord]: ...
@@ -110,7 +115,7 @@ def rerank_by_distance(
     hits: list[tuple[EventRecord, float]],
 ) -> list[tuple[EventRecord, float]]:
     """Sort hits by ascending cosine distance (closest first), stably."""
-    return sorted(hits, key=lambda h: h[1])
+    return sorted(hits, key=lambda h: (h[1], str(h[0].id)))
 
 
 def dedupe_hits(
@@ -269,20 +274,42 @@ class MemoryService:
         query: str,
         top_k: int = 20,
         filters: SearchFilters | None = None,
+        mode: SearchMode = "semantic",
     ) -> list[EventRecord]:
-        """Semantic search across both tables with pool over-fetch + re-rank."""
+        """Search records; semantic remains the default and wire shape is unchanged."""
+        return [hit.record for hit in await self.ranked_search(query, top_k, filters, mode)]
+
+    async def ranked_search(
+        self,
+        query: str,
+        top_k: int = 20,
+        filters: SearchFilters | None = None,
+        mode: SearchMode = "semantic",
+    ) -> list[RankedHit]:
+        """Internal ranked API: RRF scores and matched channels for context packs."""
         _validate_limit(top_k, "top_k")
         if not isinstance(query, str) or not 1 <= len(query) <= MAX_QUERY_LENGTH:
             raise ValueError(f"query must contain 1 to {MAX_QUERY_LENGTH} characters")
-        query_vec = await self._embed(query)
+        if mode not in ("semantic", "keyword", "hybrid"):
+            raise ValueError("invalid search mode")
+        if mode != "semantic" and not query_terms(query):
+            raise ValueError("query must contain a searchable term")
         pool = max(top_k, POOL_FLOOR)
-        hits = await self._repo.nearest_candidates(query_vec, pool, filters=filters)
-        hits = dedupe_hits(hits)
+        channels: dict[str, list[EventRecord]] = {}
         hidden = await self._repo.hidden_ids()
-        visible = [(r, d) for (r, d) in hits if r.id not in hidden and r.event_type != "tombstone"]
-        visible = [(r, d) for (r, d) in visible if matches_filters(r, filters)]
-        ranked = rerank_by_distance(visible)
-        return [r for (r, _d) in ranked[:top_k]]
+        if mode in ("semantic", "hybrid"):
+            query_vec = await self._embed(query)
+            hits = await self._repo.nearest_candidates(query_vec, pool, filters=filters)
+            channels["semantic"] = [r for r, _ in rerank_by_distance(dedupe_hits(hits))]
+        if mode in ("keyword", "hybrid"):
+            hits = await self._repo.keyword_candidates(query, pool, filters=filters)
+            hits.sort(key=lambda hit: (-hit[1], str(hit[0].id)))
+            channels["keyword"] = [r for r, _ in hits]
+        channels = {
+            name: [r for r in drop_hidden(records, hidden) if matches_filters(r, filters)]
+            for name, records in channels.items()
+        }
+        return reciprocal_rank_fusion(channels)[:top_k]
 
     async def history(self, event_id: uuid.UUID) -> list[EventRecord]:
         """Return the supersede chain for an id, ordered by created_at."""

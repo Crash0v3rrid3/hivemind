@@ -111,8 +111,24 @@ npx -y @crash0v3rrid3/hivemind install
 # First `up` BUILDS the app image locally from bundled source (no registry). The real embedder is
 # fastembed/onnxruntime (no torch), so the image is small and the first build is ~1 min; reruns reuse it.
 npx -y @crash0v3rrid3/hivemind status
+npx -y @crash0v3rrid3/hivemind sync status
 npx -y @crash0v3rrid3/hivemind doctor
 ```
+
+
+### Inspect local sync
+
+Run `hivemind sync status` (or `npx -y @crash0v3rrid3/hivemind sync status`)
+to inspect pending local exports, quarantined IDs and import/export cycle health.
+Use `hivemind sync status --json` for the validated server response. The command
+reads only the configured localhost MCP port, with a five-second timeout.
+Degraded sync and unreachable/invalid endpoints exit 1; healthy or unknown status
+exits 0. Unknown means clean cycles have not yet completed in both directions,
+even if no exports are pending. Telemetry covers this app process since startup
+and resets on restart. Remote delivery is always unknown: local publication
+does not prove another device received it. `hivemind status` continues to show
+service lifecycle status. For failures, check `hivemind logs` and the recovery
+guidance displayed by sync status.
 
 `~/.hivemind.conf` (TOML) is the only file you edit by hand:
 
@@ -251,7 +267,7 @@ hivemind/
 
 ## Releasing
 
-Pushing a tag (e.g. `v0.2.0`) triggers `.github/workflows/release.yml`, which publishes the CLI to
+Pushing a tag (e.g. `v0.3.0`) triggers `.github/workflows/release.yml`, which publishes the CLI to
 GitHub Packages. The package is **self-sufficient** — it bundles the app source and `hivemind up` builds the
 image locally — so nothing is pulled from a registry at runtime. A stack change ships as a new
 package version, which rebuilds the local image
@@ -260,3 +276,13 @@ on upgrade. Pull requests run `make check`. See the workflow for details.
 ## License
 
 [MIT](./LICENSE) © 2026 Rishab Jain.
+
+## Retrieval and context (0.3.0)
+
+`memory_search({"query":"src/sync_retry.py","mode":"hybrid","top_k":5})`
+combines semantic and literal matches; `mode: "keyword"` avoids embedding the query.
+Omitting `mode` preserves semantic search.
+`memory_context({"task":"Investigate sync retries","token_budget":800})`
+returns source IDs and excerpts with a bounded serialized-size estimate.
+See [retrieval evaluation](docs/retrieval-evaluation.md) for reproducible metrics
+and limitations.

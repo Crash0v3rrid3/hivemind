@@ -1,6 +1,6 @@
 {
   "name": "@crash0v3rrid3/hivemind",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hivemind host CLI — provisions and operates a local, serverless, append-only shared team memory exposed over MCP.",
   "keywords": [
     "mcp",

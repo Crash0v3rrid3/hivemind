@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 0.3.0
+- Explicit keyword and hybrid retrieval alongside the semantic default.
+- Bounded source context packs and local sync health/recovery observations.
+- Offline SQLite retrieval evaluation with explicit relevance labels, ranking
+  metrics, context budgets, exact-identifier regression gates and visibility checks.
+- Coupled app, CLI, runtime and template versions prepared for 0.3.0.
+- Wire schema remains v2. No release tag or publication is performed here.
+
 ## [0.2.0]
 
 ### Upgrade requirements

@@ -65,7 +65,7 @@ services:
 
   app:
     # Prefer the published image once available; build locally for prod-test.
-    # image: hivemind:${IMAGE_TAG:-0.2.0}
+    # image: hivemind:${IMAGE_TAG:-0.3.0}
     build:
       context: ./app
       args:
