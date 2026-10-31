@@ -95,8 +95,8 @@ service startup or real-model relevance.
 
 The local suite can prove SQLite behavior and integration collection without a
 PostgreSQL server. PostgreSQL runtime evidence is separate: GitHub Actions run
-41173070873, integration job 12445492773637 passed all 15 new PostgreSQL member cases
-alongside existing integration cases. PostgreSQL emits the existing SQLAlchemy
+41173070873, integration job 124454927736 passed all 37 PostgreSQL integration tests,
+including 15 new member cases. PostgreSQL emits the existing SQLAlchemy
 `ARRAY.Comparator.any()` deprecation warning more often with the expanded scenarios;
 this work does not change production queries to suppress it.
 
