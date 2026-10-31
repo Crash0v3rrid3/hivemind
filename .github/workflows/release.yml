@@ -1,6 +1,6 @@
 name: CI & Release
 
-# - Pull requests: run `make check` (unit layer) + a macOS Nix flake build.
+# - Pull requests: unit checks, offline evaluation, packed CLI, Postgres, macOS Nix.
 # - Tag push (v*): publish the CLI to GitHub Packages.
 
 on:
@@ -34,7 +34,26 @@ jobs:
           node-version: "20"
 
       - name: Run unit checks for both packages
-        run: make check
+        run: make check eval-retrieval
+
+  # The smoke harness uses POSIX shell stubs and local HTTP servers on Linux.
+  package-smoke:
+    name: Packed CLI smoke (Node ${{ matrix.node }}, Linux)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install CLI dependencies
+        run: npm --prefix cli ci
+      - name: Build and smoke-test packed CLI
+        run: npm --prefix cli run smoke:package
 
   # ---------------------------------------------------------------------------
   # Nix flake build (macOS) — validates the default `deploy_backend=nix` runtime
@@ -108,7 +127,7 @@ jobs:
   publish-cli:
     name: Publish CLI to GitHub Packages
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, integration, nix-build]
+    needs: [check, integration, nix-build, package-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read

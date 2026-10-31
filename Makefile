@@ -23,7 +23,7 @@ CLI_STAMP  := $(CLI_DIR)/node_modules/.install-stamp
 
 .DEFAULT_GOAL := check
 
-.PHONY: help fmt lint typecheck test check \
+.PHONY: help fmt lint typecheck test check regression package-smoke \
         app-fmt app-lint app-typecheck app-test \
         cli-fmt cli-lint cli-typecheck cli-test \
         deps app-deps cli-deps clean
@@ -65,6 +65,11 @@ typecheck: app-typecheck cli-typecheck ## Type-check both packages
 test: app-test cli-test ## Run the unit test layer for both packages
 
 check: lint typecheck test ## Full verification (unit layer) — must be green on a clean checkout
+
+regression: check eval-retrieval package-smoke ## Released-feature checks, offline evaluator, and packed CLI smoke
+
+package-smoke: cli-deps ## Build, pack, and exercise the isolated shipped CLI
+	npm --prefix $(CLI_DIR) run smoke:package
 
 ## ---------------------------------------------------------------------------
 ## Python app (app/)
